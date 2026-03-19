@@ -234,6 +234,7 @@ public class AdminController {
                 order.getOrderNumber(),
                 order.getCustomerName(),
                 order.getStatus(),
+                order.getPayMethod(),
                 order.getTotalAmount(),
                 order.getCreatedAt(),
                 order.getItems() == null ? 0 : order.getItems().size());

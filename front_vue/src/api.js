@@ -33,12 +33,22 @@ export const login = async (payload) => {
   return res.data;
 };
 
+export const fetchLoginCaptcha = async () => {
+  const res = await api.get('/api/auth/captcha');
+  return res.data;
+};
+
 export const logout = async () => {
   await api.post('/api/auth/logout');
 };
 
 export const register = async (payload) => {
   const res = await api.post('/api/auth/register', payload);
+  return res.data;
+};
+
+export const sendRegisterEmailCode = async (email) => {
+  const res = await api.post('/api/auth/email-code', { email });
   return res.data;
 };
 

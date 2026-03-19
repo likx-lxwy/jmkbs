@@ -21,6 +21,9 @@ public class User {
     @Column(nullable = false, length = 120)
     private String password;
 
+    @Column(length = 120)
+    private String email;
+
     @Column(nullable = false, length = 20)
     private String role; // USER, MERCHANT, ADMIN
 
@@ -65,6 +68,14 @@ public class User {
 
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
     }
 
     public String getRole() {

@@ -194,14 +194,6 @@ public class OrderService {
         }
         User buyer = order.getBuyer();
         if (buyer != null) {
-            BigDecimal amount = order.getTotalAmount() == null ? BigDecimal.ZERO : order.getTotalAmount();
-            BigDecimal balance = buyer.getWalletBalance() == null ? BigDecimal.ZERO : buyer.getWalletBalance();
-            BigDecimal newBalance = balance.subtract(amount);
-            if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-                newBalance = BigDecimal.ZERO;
-            }
-            buyer.setWalletBalance(newBalance);
-            userRepository.save(buyer);
             recordPayment(buyer, orderNumber, order.getTotalAmount(), "PAY", "支付宝支付");
         }
         if (order.isRequiresApproval()) {

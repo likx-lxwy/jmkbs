@@ -8,6 +8,7 @@ public class AdminOrderSummary {
     private String orderNumber;
     private String customerName;
     private String status;
+    private String payMethod;
     private BigDecimal totalAmount;
     private LocalDateTime createdAt;
     private int itemCount;
@@ -15,11 +16,12 @@ public class AdminOrderSummary {
     public AdminOrderSummary() {
     }
 
-    public AdminOrderSummary(Long id, String orderNumber, String customerName, String status, BigDecimal totalAmount, LocalDateTime createdAt, int itemCount) {
+    public AdminOrderSummary(Long id, String orderNumber, String customerName, String status, String payMethod, BigDecimal totalAmount, LocalDateTime createdAt, int itemCount) {
         this.id = id;
         this.orderNumber = orderNumber;
         this.customerName = customerName;
         this.status = status;
+        this.payMethod = payMethod;
         this.totalAmount = totalAmount;
         this.createdAt = createdAt;
         this.itemCount = itemCount;
@@ -55,6 +57,14 @@ public class AdminOrderSummary {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getPayMethod() {
+        return payMethod;
+    }
+
+    public void setPayMethod(String payMethod) {
+        this.payMethod = payMethod;
     }
 
     public BigDecimal getTotalAmount() {

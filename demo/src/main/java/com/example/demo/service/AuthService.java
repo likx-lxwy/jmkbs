@@ -28,16 +28,33 @@ public class AuthService {
     private final AuthTokenRepository authTokenRepository;
     private final BCryptPasswordEncoder passwordEncoder;
     private final LoginLogRepository loginLogRepository;
+    private final CaptchaService captchaService;
+    private final RegisterEmailService registerEmailService;
 
-    public AuthService(UserRepository userRepository, AuthTokenRepository authTokenRepository, BCryptPasswordEncoder passwordEncoder, LoginLogRepository loginLogRepository) {
+    public AuthService(UserRepository userRepository,
+                       AuthTokenRepository authTokenRepository,
+                       BCryptPasswordEncoder passwordEncoder,
+                       LoginLogRepository loginLogRepository,
+                       CaptchaService captchaService,
+                       RegisterEmailService registerEmailService) {
         this.userRepository = userRepository;
         this.authTokenRepository = authTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.loginLogRepository = loginLogRepository;
+        this.captchaService = captchaService;
+        this.registerEmailService = registerEmailService;
     }
 
     @Transactional
     public LoginResponse login(LoginRequest request, HttpSession session, String ip) {
+        return login(request, session, ip, false);
+    }
+
+    @Transactional
+    private LoginResponse login(LoginRequest request, HttpSession session, String ip, boolean skipCaptcha) {
+        if (!skipCaptcha) {
+            captchaService.validateCaptcha(request.getCaptchaToken(), request.getCaptchaCode());
+        }
         User user = userRepository.findByUsername(request.getUsername())
                 .orElseGet(() -> {
                     // 默认管理员兜底
@@ -109,6 +126,10 @@ public class AuthService {
         return user;
     }
 
+    public java.util.Map<String, Object> sendRegisterEmailCode(String email) {
+        return registerEmailService.sendRegisterCode(email);
+    }
+
     @Transactional
     public LoginResponse register(RegisterRequest request, HttpSession session) {
         String role = request.getRole().toUpperCase();
@@ -118,10 +139,13 @@ public class AuthService {
         userRepository.findByUsername(request.getUsername()).ifPresent(u -> {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
         });
+        String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase();
+        registerEmailService.verifyRegisterCode(email, request.getEmailCode());
 
         User user = new User();
         user.setUsername(request.getUsername());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
+        user.setEmail(email);
         user.setRole(role);
         user.setMerchantStatus(role.equals("MERCHANT") ? "PENDING" : "NONE");
         user.setWalletBalance(java.math.BigDecimal.valueOf(50));
@@ -131,7 +155,7 @@ public class AuthService {
         LoginRequest loginRequest = new LoginRequest();
         loginRequest.setUsername(request.getUsername());
         loginRequest.setPassword(request.getPassword());
-        return login(loginRequest, session, null);
+        return login(loginRequest, session, null, true);
     }
 
     @Transactional

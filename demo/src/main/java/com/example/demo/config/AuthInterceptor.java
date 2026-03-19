@@ -15,10 +15,14 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private final AuthService authService;
     private final Set<String> openPaths = Set.of(
+            "/api/auth/captcha",
+            "/api/auth/email-code",
             "/api/auth/login",
             "/api/auth/register",
             "/api/auth/logout",
-            "/api/categories"
+            "/api/categories",
+            "/api/payments/alipay/notify",
+            "/api/payments/alipay/return"
     );
 
     public AuthInterceptor(AuthService authService) {

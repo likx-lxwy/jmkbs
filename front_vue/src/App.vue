@@ -1,13 +1,15 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch, nextTick } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue';
 import {
   fetchCategories,
   fetchProducts,
   submitOrder,
+  fetchLoginCaptcha,
   login,
   logout,
   createProduct,
   register,
+  sendRegisterEmailCode,
   fetchAdminOverview,
   fetchAdminMerchants,
   updateMerchantStatus,
@@ -87,14 +89,27 @@ const auth = reactive({
 
 const loginForm = reactive({
   username: '',
-  password: ''
+  password: '',
+  captchaCode: ''
+});
+
+const loginCaptcha = reactive({
+  token: '',
+  imageData: '',
+  loading: false
 });
 
 const registerForm = reactive({
   username: '',
   password: '',
+  email: '',
+  emailCode: '',
   role: 'USER'
 });
+
+const registerEmailSending = ref(false);
+const registerEmailCooldown = ref(0);
+let registerEmailTimer = null;
 
 const productForm = reactive({
   name: '',
@@ -456,6 +471,10 @@ onMounted(() => {
   }
 });
 
+onBeforeUnmount(() => {
+  clearRegisterEmailTimer();
+});
+
 watch(isAdmin, (value) => {
   if (value) {
     currentPage.value = 'adminOverview';
@@ -812,6 +831,38 @@ function formatOrderStatus(status) {
       return '已退款（站内钱包）';
     default:
       return status ? `${status}（站内钱包）` : '-';
+  }
+}
+
+function formatOrderStatusWithPayMethod(status, payMethod) {
+  const normalizedStatus = (status || '').toUpperCase();
+  const normalizedPayMethod = (payMethod || '').toUpperCase();
+  const payMethodLabel = normalizedPayMethod === 'ALIPAY'
+    ? '支付宝支付'
+    : normalizedPayMethod === 'WALLET'
+      ? '站内钱包支付'
+      : normalizedStatus === 'PENDING_PAYMENT'
+        ? '支付宝支付'
+        : '未知支付方式';
+  const suffix = `（${payMethodLabel}）`;
+
+  switch (normalizedStatus) {
+    case 'PENDING_PAYMENT':
+      return `待支付${suffix}`;
+    case 'PLACED':
+      return `已下单${suffix}`;
+    case 'PENDING_ADMIN':
+      return `待管理员审批${suffix}`;
+    case 'APPROVED':
+      return `已完成${suffix}`;
+    case 'REFUND_REQUESTED':
+      return `退款待审核${suffix}`;
+    case 'REJECTED':
+      return `已拒绝${suffix}`;
+    case 'REFUNDED':
+      return `已退款${suffix}`;
+    default:
+      return status ? `${status}${suffix}` : '-';
   }
 }
 
@@ -1250,22 +1301,43 @@ function setNotice(type, message) {
   }, 2600);
 }
 
-function openLoginModal() {
+async function loadLoginCaptcha() {
+  loginCaptcha.loading = true;
+  try {
+    const res = await fetchLoginCaptcha();
+    loginCaptcha.token = res.captchaToken || '';
+    loginCaptcha.imageData = res.imageData || '';
+    loginForm.captchaCode = '';
+  } catch (err) {
+    loginCaptcha.token = '';
+    loginCaptcha.imageData = '';
+    loginNotice.value = '验证码加载失败，请点击换一张重试';
+  } finally {
+    loginCaptcha.loading = false;
+  }
+}
+
+async function openLoginModal() {
   showRegisterModal.value = false;
   registerNotice.value = '';
   loginNotice.value = '';
   showLoginModal.value = true;
+  await loadLoginCaptcha();
 }
 
 function closeLoginModal() {
   showLoginModal.value = false;
   loginNotice.value = '';
+  loginForm.captchaCode = '';
+  loginCaptcha.token = '';
+  loginCaptcha.imageData = '';
 }
 
 function openRegisterModal() {
   showLoginModal.value = false;
   loginNotice.value = '';
   registerNotice.value = '';
+  registerForm.emailCode = '';
   showRegisterModal.value = true;
 }
 
@@ -1290,6 +1362,53 @@ async function openPayModal() {
 function closeRegisterModal() {
   showRegisterModal.value = false;
   registerNotice.value = '';
+  registerForm.emailCode = '';
+  clearRegisterEmailTimer();
+  registerEmailCooldown.value = 0;
+}
+
+function clearRegisterEmailTimer() {
+  if (registerEmailTimer) {
+    clearInterval(registerEmailTimer);
+    registerEmailTimer = null;
+  }
+}
+
+function startRegisterEmailCooldown(seconds = 60) {
+  clearRegisterEmailTimer();
+  registerEmailCooldown.value = seconds;
+  registerEmailTimer = setInterval(() => {
+    registerEmailCooldown.value = Math.max(0, registerEmailCooldown.value - 1);
+    if (registerEmailCooldown.value <= 0) {
+      clearRegisterEmailTimer();
+    }
+  }, 1000);
+}
+
+async function requestRegisterCode() {
+  const email = (registerForm.email || '').trim().toLowerCase();
+  const emailPattern = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+  if (!emailPattern.test(email)) {
+    registerNotice.value = '请输入有效的邮箱地址';
+    return;
+  }
+  if (registerEmailCooldown.value > 0 || registerEmailSending.value) {
+    return;
+  }
+  registerEmailSending.value = true;
+  try {
+    const res = await sendRegisterEmailCode(email);
+    registerForm.email = email;
+    registerForm.emailCode = '';
+    registerNotice.value = '';
+    setNotice('success', '邮箱验证码已发送，请注意查收');
+    startRegisterEmailCooldown(Number(res?.cooldownSeconds || 60));
+  } catch (err) {
+    const msg = err?.response?.data?.message || '邮箱验证码发送失败';
+    registerNotice.value = msg;
+  } finally {
+    registerEmailSending.value = false;
+  }
 }
 
 async function handleLogin() {
@@ -1297,8 +1416,22 @@ async function handleLogin() {
     loginNotice.value = '请输入账号和密码';
     return;
   }
+  if (!loginForm.captchaCode) {
+    loginNotice.value = '请输入图片验证码';
+    return;
+  }
+  if (!loginCaptcha.token) {
+    loginNotice.value = '验证码已失效，请刷新后重试';
+    await loadLoginCaptcha();
+    return;
+  }
   try {
-    const res = await login({ username: loginForm.username, password: loginForm.password });
+    const res = await login({
+      username: loginForm.username,
+      password: loginForm.password,
+      captchaToken: loginCaptcha.token,
+      captchaCode: loginForm.captchaCode
+    });
     auth.token = res.token;
     auth.username = res.username;
     auth.role = res.role;
@@ -1318,6 +1451,7 @@ async function handleLogin() {
   } catch (err) {
     const msg = err?.response?.data?.message || '登录失败';
     loginNotice.value = msg;
+    await loadLoginCaptcha();
   }
 }
 
@@ -1470,6 +1604,51 @@ async function handleRegister() {
     localStorage.setItem('mk_merchant_status', auth.merchantStatus);
     setNotice('success', registerForm.role === 'MERCHANT' ? '注册成功，待审核后可上架' : '注册成功');
     registerNotice.value = '';
+    closeRegisterModal();
+    closeLoginModal();
+    if (auth.role === 'MERCHANT') {
+      await loadMyProducts();
+    }
+    await loadWallet();
+    await loadPaymentLogs();
+  } catch (err) {
+    const msg = err?.response?.data?.message || '注册失败';
+    registerNotice.value = msg;
+  }
+}
+
+async function handleRegisterWithEmail() {
+  if (!registerForm.username || !registerForm.password) {
+    registerNotice.value = '请输入账号和密码';
+    return;
+  }
+  if (!registerForm.email) {
+    registerNotice.value = '请输入邮箱地址';
+    return;
+  }
+  if (!registerForm.emailCode) {
+    registerNotice.value = '请输入邮箱验证码';
+    return;
+  }
+  try {
+    const res = await register({
+      username: registerForm.username,
+      password: registerForm.password,
+      email: registerForm.email,
+      emailCode: registerForm.emailCode,
+      role: registerForm.role
+    });
+    auth.token = res.token;
+    auth.username = res.username;
+    auth.role = res.role;
+    auth.merchantStatus = res.merchantStatus || '';
+    localStorage.setItem('mk_token', res.token);
+    localStorage.setItem('mk_username', res.username);
+    localStorage.setItem('mk_role', res.role);
+    localStorage.setItem('mk_merchant_status', auth.merchantStatus);
+    setNotice('success', registerForm.role === 'MERCHANT' ? '注册成功，待审核后可上架' : '注册成功');
+    registerNotice.value = '';
+    registerForm.emailCode = '';
     closeRegisterModal();
     closeLoginModal();
     if (auth.role === 'MERCHANT') {
@@ -2349,7 +2528,7 @@ function bytesToHex(bytes) {
           <div>￥{{ Number(order.totalAmount || 0).toFixed(2) }}</div>
           <div>{{ order.itemCount }} 件</div>
           <div>
-            <span class="status-badge" data-variant="DEFAULT">{{ formatOrderStatus(order.status) }}</span>
+            <span class="status-badge" data-variant="DEFAULT">{{ formatOrderStatusWithPayMethod(order.status, order.payMethod) }}</span>
           </div>
           <div>{{ formatDateTime(order.createdAt) }}</div>
           <div class="admin-table__actions" v-if="order.status === 'REFUND_REQUESTED'">
@@ -2545,7 +2724,7 @@ function bytesToHex(bytes) {
             <span>{{ o.orderNumber }}</span>
             <span>{{ o.customerName }}</span>
             <span>¥{{ Number(o.totalAmount || 0).toFixed(2) }}</span>
-            <span>{{ formatOrderStatus(o.status) }}</span>
+            <span>{{ formatOrderStatusWithPayMethod(o.status, o.payMethod) }}</span>
             <div class="admin-table__actions">
               <button class="primary" type="button" @click="approvePending(o.id, true)">同意</button>
               <button class="ghost danger" type="button" @click="approvePending(o.id, false)">拒绝</button>
@@ -3232,7 +3411,7 @@ function bytesToHex(bytes) {
           >
             <span>{{ o.orderNumber }}</span>
             <span>¥{{ Number(o.totalAmount || 0).toFixed(2) }}</span>
-            <span>{{ formatOrderStatus(o.status) }}</span>
+            <span>{{ formatOrderStatusWithPayMethod(o.status, o.payMethod) }}</span>
             <span>{{ formatDateTime(o.createdAt) }}</span>
             <div class="admin-table__actions">
               <button
@@ -3509,6 +3688,25 @@ function bytesToHex(bytes) {
             密码
             <input v-model="loginForm.password" type="password" placeholder="user123" />
           </label>
+          <label>
+            图片验证码
+            <div class="captcha-row">
+              <input
+                v-model="loginForm.captchaCode"
+                type="text"
+                maxlength="4"
+                autocomplete="off"
+                placeholder="请输入验证码"
+              />
+              <div class="captcha-preview" @click="loadLoginCaptcha">
+                <img v-if="loginCaptcha.imageData" :src="loginCaptcha.imageData" alt="登录验证码" class="captcha-image" />
+                <span v-else class="captcha-image captcha-image--empty">{{ loginCaptcha.loading ? '加载中...' : '点击获取' }}</span>
+              </div>
+              <button class="ghost captcha-refresh" type="button" :disabled="loginCaptcha.loading" @click="loadLoginCaptcha">
+                {{ loginCaptcha.loading ? '刷新中...' : '换一张' }}
+              </button>
+            </div>
+          </label>
           <button class="primary block" type="submit">登录</button>
           <p class="muted" style="text-align:center;">
             没有账户？
@@ -3687,7 +3885,7 @@ function bytesToHex(bytes) {
         <div v-if="registerNotice" class="inline-notice" data-variant="error">
           {{ registerNotice }}
         </div>
-        <form class="auth-form" @submit.prevent="handleRegister">
+        <form class="auth-form" @submit.prevent="handleRegisterWithEmail">
           <label>
             账号
             <input v-model="registerForm.username" type="text" placeholder="请输入账号" />
@@ -3695,6 +3893,24 @@ function bytesToHex(bytes) {
           <label>
             密码
             <input v-model="registerForm.password" type="password" placeholder="设置登录密码" />
+          </label>
+          <label>
+            邮箱
+            <input v-model="registerForm.email" type="email" placeholder="请输入邮箱地址" />
+          </label>
+          <label>
+            邮箱验证码
+            <div class="verify-row">
+              <input v-model="registerForm.emailCode" type="text" maxlength="6" placeholder="请输入邮箱验证码" />
+              <button
+                class="ghost verify-btn"
+                type="button"
+                :disabled="registerEmailSending || registerEmailCooldown > 0"
+                @click="requestRegisterCode"
+              >
+                {{ registerEmailSending ? '发送中...' : registerEmailCooldown > 0 ? `${registerEmailCooldown}s 后重发` : '发送验证码' }}
+              </button>
+            </div>
           </label>
           <label>
             角色
@@ -4952,6 +5168,61 @@ select {
   gap: 8px;
 }
 
+.captcha-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.captcha-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.captcha-preview {
+  width: 132px;
+  min-width: 132px;
+  height: 44px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.captcha-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.captcha-image--empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.captcha-refresh {
+  white-space: nowrap;
+}
+
+.verify-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.verify-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.verify-btn {
+  white-space: nowrap;
+}
+
 .loading {
   padding: 16px;
   border-radius: 12px;
@@ -5221,6 +5492,19 @@ select {
   .hero__actions {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .captcha-row,
+  .verify-row {
+    flex-wrap: wrap;
+  }
+
+  .captcha-preview,
+  .captcha-refresh,
+  .verify-btn {
+    width: 100%;
   }
 }
 
