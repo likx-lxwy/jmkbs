@@ -112,7 +112,7 @@ public class UploadController {
 
     private boolean isAllowedMerchant(User user) {
         return "MERCHANT".equalsIgnoreCase(user.getRole())
-                && (user.getMerchantStatus() == null || !"BANNED".equalsIgnoreCase(user.getMerchantStatus()));
+                && "APPROVED".equalsIgnoreCase(user.getMerchantStatus());
     }
 
     private boolean isAdmin(User user) {

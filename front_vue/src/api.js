@@ -23,8 +23,18 @@ export const fetchProducts = async (categoryId) => {
   return res.data;
 };
 
+export const fetchProductDetail = async (id) => {
+  const res = await api.get(`/api/products/${id}`);
+  return res.data;
+};
+
 export const submitOrder = async (payload) => {
   const res = await api.post('/api/orders', payload);
+  return res.data;
+};
+
+export const submitOrderBatch = async (payload) => {
+  const res = await api.post('/api/orders/batch', payload);
   return res.data;
 };
 
@@ -81,55 +91,41 @@ export const updateMerchantStatus = async (id, payload) => {
   return res.data;
 };
 
+export const getMerchantProfile = async () => {
+  const res = await api.get('/api/merchant/profile');
+  return res.data;
+};
+
+export const saveMerchantProfile = async (payload) => {
+  const res = await api.put('/api/merchant/profile', payload);
+  return res.data;
+};
+
 export const fetchAdminOrders = async () => {
   const res = await api.get('/api/admin/orders');
   return res.data;
 };
 
-export const fetchPendingOrders = async () => {
-  const res = await api.get('/api/admin/orders/pending');
+export const fetchAdminUsers = async () => {
+  const res = await api.get('/api/admin/users');
   return res.data;
 };
 
-export const approveOrder = async (id) => {
-  await api.post(`/api/admin/orders/${id}/approve`);
-};
-
-export const rejectOrder = async (id) => {
-  await api.post(`/api/admin/orders/${id}/reject`);
-};
-
-export const getAiKey = async () => {
-  const res = await api.get('/api/admin/ai/key');
+export const updateAdminUserAccountStatus = async (id, status) => {
+  const res = await api.post(`/api/admin/users/${id}/account-status`, { status });
   return res.data;
 };
 
-export const saveAiKey = async (payload) => {
-  const res = await api.post('/api/admin/ai/key', payload);
-  return res.data;
+export const deleteAdminUser = async (id) => {
+  await api.delete(`/api/admin/users/${id}`);
 };
 
-export const aiRecommend = async (query) => {
-  const res = await api.post('/api/ai/recommend', { query });
-  return res.data;
+export const approveRefundMerchant = async (id) => {
+  await api.post(`/api/orders/${id}/refund/approve`);
 };
 
-export const approveRefundAdmin = async (id) => {
-  await api.post(`/api/admin/orders/${id}/refund/approve`);
-};
-
-export const rejectRefundAdmin = async (id) => {
-  await api.post(`/api/admin/orders/${id}/refund/reject`);
-};
-
-export const getSettings = async () => {
-  const res = await api.get('/api/admin/settings');
-  return res.data;
-};
-
-export const setApprovalLevel = async (level) => {
-  const res = await api.post('/api/admin/settings/approval', { orderApprovalLevel: level });
-  return res.data;
+export const rejectRefundMerchant = async (id) => {
+  await api.post(`/api/orders/${id}/refund/reject`);
 };
 
 export const getWallet = async () => {
@@ -142,37 +138,12 @@ export const recharge = async (amount) => {
   return res.data;
 };
 
-export const paySubscription = async () => {
-  const res = await api.post('/api/wallet/subscribe');
-  return res.data;
-};
-
-export const adminWallets = async () => {
-  const res = await api.get('/api/wallet/admin/users');
-  return res.data;
-};
-
-export const adminAdjustWallet = async (id, amount) => {
-  const res = await api.post(`/api/wallet/admin/users/${id}/wallet`, { amount });
-  return res.data;
-};
-
 export const adminResetPassword = async (id, password) => {
   await api.post(`/api/wallet/admin/users/${id}/password`, { password });
 };
 
 export const fetchAdminRevenue = async () => {
   const res = await api.get('/api/admin/revenue');
-  return res.data;
-};
-
-export const fetchLoginLogs = async () => {
-  const res = await api.get('/api/admin/login-logs');
-  return res.data;
-};
-
-export const fetchSystemLogs = async (lines = 200) => {
-  const res = await api.get('/api/admin/system-logs', { params: { lines } });
   return res.data;
 };
 
@@ -191,9 +162,13 @@ export const fetchRecentChat = async () => {
   return res.data;
 };
 
-export const runTerminal = async (command, password, signature) => {
-  const res = await api.post('/api/admin/terminal/run', { command, password, signature });
+export const fetchRefundChat = async (orderId) => {
+  const res = await api.get(`/api/orders/${orderId}/refund-chat`);
   return res.data;
+};
+
+export const sendRefundChat = async (orderId, content) => {
+  await api.post(`/api/orders/${orderId}/refund-chat`, { content });
 };
 
 export const fetchPaymentLogs = async () => {
@@ -206,12 +181,28 @@ export const fetchMyOrders = async () => {
   return res.data;
 };
 
+export const confirmReceiptOrder = async (id) => {
+  await api.post(`/api/orders/${id}/confirm-receipt`);
+};
+
+export const submitMerchantOrderReview = async (id, payload) => {
+  await api.post(`/api/orders/${id}/review`, payload);
+};
+
 export const refundOrder = async (id, payload = {}) => {
   await api.post(`/api/orders/${id}/refund`, payload);
 };
 
-export const createAlipayPayUrl = async (orderId) => {
-  const res = await api.post('/api/payments/alipay/pay', { orderId });
+export const createAlipayPayUrl = async (payload) => {
+  const requestBody = typeof payload === 'object' && payload !== null
+    ? payload
+    : { orderId: payload };
+  const res = await api.post('/api/payments/alipay/pay', requestBody);
+  return res.data;
+};
+
+export const confirmAlipayReturn = async (payload) => {
+  const res = await api.post('/api/payments/alipay/confirm', payload);
   return res.data;
 };
 
@@ -245,11 +236,6 @@ export const fetchComments = async (productId) => {
 
 export const addComment = async (productId, content) => {
   const res = await api.post(`/api/products/${productId}/comments`, { content });
-  return res.data;
-};
-
-export const fetchProductIntro = async (productId) => {
-  const res = await api.get(`/api/ai/product/${productId}/intro`);
   return res.data;
 };
 

@@ -4,7 +4,6 @@ import com.example.demo.model.User;
 import com.example.demo.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import jakarta.servlet.http.HttpSession;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.server.ResponseStatusException;
@@ -34,27 +33,36 @@ public class AuthInterceptor implements HandlerInterceptor {
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
             return true;
         }
+
         String path = request.getRequestURI();
         if (isOpenPath(path, request.getMethod())) {
             return true;
         }
-        String token = request.getHeader("X-Auth-Token");
-        HttpSession session = request.getSession();
-        User user = authService.validateToken(token, session);
+
+        User user = authService.validateToken(resolveToken(request));
         if (user == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未登录或会话已过期");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未登录或登录已过期");
         }
+        authService.ensureAccountAccessible(user);
+
         request.setAttribute("CURRENT_USER", user);
         return true;
     }
 
     private boolean isOpenPath(String path, String method) {
         if ("GET".equalsIgnoreCase(method)) {
-            // 商品列表/详情允许匿名，其它子路径（如 /mine）需鉴权
             if (path.matches("^/api/products/?$") || path.matches("^/api/products/\\d+$")) {
                 return true;
             }
         }
         return openPaths.contains(path);
+    }
+
+    private String resolveToken(HttpServletRequest request) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            return authorization.substring(7).trim();
+        }
+        return request.getHeader("X-Auth-Token");
     }
 }

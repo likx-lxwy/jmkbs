@@ -1,7 +1,7 @@
 package com.example.demo.controller;
 
+import com.example.demo.mapper.CategoryQueryMapper;
 import com.example.demo.model.Category;
-import com.example.demo.repository.CategoryRepository;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -14,14 +14,14 @@ import java.util.List;
 @CrossOrigin(origins = "*")
 public class CategoryController {
 
-    private final CategoryRepository categoryRepository;
+    private final CategoryQueryMapper categoryQueryMapper;
 
-    public CategoryController(CategoryRepository categoryRepository) {
-        this.categoryRepository = categoryRepository;
+    public CategoryController(CategoryQueryMapper categoryQueryMapper) {
+        this.categoryQueryMapper = categoryQueryMapper;
     }
 
     @GetMapping
     public List<Category> list() {
-        return categoryRepository.findAll();
+        return categoryQueryMapper.selectAll();
     }
 }

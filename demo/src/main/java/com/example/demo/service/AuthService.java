@@ -3,159 +3,150 @@ package com.example.demo.service;
 import com.example.demo.dto.LoginRequest;
 import com.example.demo.dto.LoginResponse;
 import com.example.demo.dto.RegisterRequest;
-import com.example.demo.model.AuthToken;
+import com.example.demo.mapper.UserQueryMapper;
 import com.example.demo.model.User;
-import com.example.demo.repository.AuthTokenRepository;
-import com.example.demo.repository.LoginLogRepository;
-import com.example.demo.repository.UserRepository;
-import jakarta.servlet.http.HttpSession;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.LocalDateTime;
-import java.util.UUID;
+import java.util.Map;
 
 @Service
 public class AuthService {
 
-    private static final int SESSION_SECONDS = 7200;
-
-    private final UserRepository userRepository;
-    private final AuthTokenRepository authTokenRepository;
-    private final BCryptPasswordEncoder passwordEncoder;
-    private final LoginLogRepository loginLogRepository;
+    private final UserQueryMapper userQueryMapper;
+    private final PasswordHashService passwordHashService;
+    private final JwtTokenService jwtTokenService;
     private final CaptchaService captchaService;
     private final RegisterEmailService registerEmailService;
 
-    public AuthService(UserRepository userRepository,
-                       AuthTokenRepository authTokenRepository,
-                       BCryptPasswordEncoder passwordEncoder,
-                       LoginLogRepository loginLogRepository,
+    public AuthService(UserQueryMapper userQueryMapper,
+                       PasswordHashService passwordHashService,
+                       JwtTokenService jwtTokenService,
                        CaptchaService captchaService,
                        RegisterEmailService registerEmailService) {
-        this.userRepository = userRepository;
-        this.authTokenRepository = authTokenRepository;
-        this.passwordEncoder = passwordEncoder;
-        this.loginLogRepository = loginLogRepository;
+        this.userQueryMapper = userQueryMapper;
+        this.passwordHashService = passwordHashService;
+        this.jwtTokenService = jwtTokenService;
         this.captchaService = captchaService;
         this.registerEmailService = registerEmailService;
     }
 
     @Transactional
-    public LoginResponse login(LoginRequest request, HttpSession session, String ip) {
-        return login(request, session, ip, false);
+    public LoginResponse login(LoginRequest request, String ip) {
+        return login(request, ip, false);
     }
 
     @Transactional
-    private LoginResponse login(LoginRequest request, HttpSession session, String ip, boolean skipCaptcha) {
+    private LoginResponse login(LoginRequest request, String ip, boolean skipCaptcha) {
         if (!skipCaptcha) {
             captchaService.validateCaptcha(request.getCaptchaToken(), request.getCaptchaCode());
         }
-        User user = userRepository.findByUsername(request.getUsername())
-                .orElseGet(() -> {
-                    // 默认管理员兜底
-                    if ("admin01".equalsIgnoreCase(request.getUsername())) {
-                        User admin = new User();
-                        admin.setUsername("admin01");
-                        admin.setPassword(passwordEncoder.encode("admin123"));
-                        admin.setRole("ADMIN");
-                        admin.setMerchantStatus("NONE");
-                        return userRepository.save(admin);
-                    }
-                    throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "账号或密码错误");
-                });
 
-        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            recordLogin(user, request.getUsername(), false, ip);
+        User user = userQueryMapper.selectByUsername(request.getUsername());
+        if (user == null && "admin01".equalsIgnoreCase(request.getUsername())) {
+            User admin = new User();
+            admin.setUsername("admin01");
+            admin.setPassword(passwordHashService.encode("admin123"));
+            admin.setRole("ADMIN");
+            admin.setMerchantStatus("NONE");
+            userQueryMapper.insert(admin);
+            user = admin;
+        }
+        if (user == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "账号或密码错误");
+        }
+
+        if (!passwordHashService.matches(request.getPassword(), user.getPassword())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "账号或密码错误");
+        }
+
+        boolean needsUpdate = false;
+        if (passwordHashService.needsUpgrade(user.getPassword())) {
+            user.setPassword(passwordHashService.encode(request.getPassword()));
+            needsUpdate = true;
         }
         if (user.getMerchantStatus() == null) {
             user.setMerchantStatus("NONE");
-            userRepository.save(user);
+            needsUpdate = true;
+        }
+        if (user.getAccountStatus() == null || user.getAccountStatus().isBlank()) {
+            user.setAccountStatus("ACTIVE");
+            needsUpdate = true;
+        }
+        if (needsUpdate) {
+            userQueryMapper.update(user);
         }
 
-        AuthToken token = new AuthToken();
-        token.setUser(user);
-        token.setToken(UUID.randomUUID().toString().replace("-", ""));
-        token.setExpiresAt(LocalDateTime.now().plusSeconds(SESSION_SECONDS));
-        authTokenRepository.save(token);
-
-        session.setAttribute("USER_ID", user.getId());
-        session.setAttribute("USER_ROLE", user.getRole());
-        session.setMaxInactiveInterval(SESSION_SECONDS);
-
-        recordLogin(user, request.getUsername(), true, ip);
-        return new LoginResponse(token.getToken(), user.getUsername(), user.getRole(), user.getMerchantStatus());
+        ensureAccountAccessible(user);
+        String token = jwtTokenService.createToken(user);
+        return new LoginResponse(token, user.getUsername(), user.getRole(), user.getMerchantStatus());
     }
 
-    @Transactional
-    public void logout(String token, HttpSession session) {
-        if (token != null) {
-            authTokenRepository.findByToken(token).ifPresent(authTokenRepository::delete);
-        }
-        session.invalidate();
+    public void logout(String token) {
+        // JWT is stateless. Frontend clears the local token on logout.
     }
 
-    @Transactional
-    public User validateToken(String token, HttpSession session) {
-        if (token == null || token.isEmpty()) {
+    @Transactional(readOnly = true)
+    public User validateToken(String token) {
+        if (token == null || token.isBlank()) {
             return null;
         }
-        authTokenRepository.deleteByExpiresAtBefore(LocalDateTime.now());
-        AuthToken authToken = authTokenRepository.findByTokenWithUser(token).orElse(null);
-        if (authToken == null || authToken.getExpiresAt().isBefore(LocalDateTime.now())) {
+
+        try {
+            JwtTokenService.JwtClaims claims = jwtTokenService.parseToken(token);
+            return userQueryMapper.selectById(claims.userId());
+        } catch (IllegalArgumentException ex) {
             return null;
         }
-        User user = authToken.getUser();
-        // 预先触发加载，避免懒加载错误
-        if (user != null) {
-            user.getId();
-            user.getRole();
-            user.getMerchantStatus();
-            user.getUsername();
-        }
-        session.setAttribute("USER_ID", user.getId());
-        session.setAttribute("USER_ROLE", user.getRole());
-        session.setMaxInactiveInterval(SESSION_SECONDS);
-        authToken.setExpiresAt(LocalDateTime.now().plusSeconds(SESSION_SECONDS));
-        authTokenRepository.save(authToken);
-        return user;
     }
 
-    public java.util.Map<String, Object> sendRegisterEmailCode(String email) {
+    public void ensureAccountAccessible(User user) {
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未登录或登录已过期");
+        }
+        String status = normalizeAccountStatus(user.getAccountStatus());
+        if ("BANNED".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已被封禁");
+        }
+        if ("DELETED".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已被删除");
+        }
+    }
+
+    public Map<String, Object> sendRegisterEmailCode(String email) {
         return registerEmailService.sendRegisterCode(email);
     }
 
     @Transactional
-    public LoginResponse register(RegisterRequest request, HttpSession session) {
+    public LoginResponse register(RegisterRequest request) {
         String role = request.getRole().toUpperCase();
         if (!role.equals("USER") && !role.equals("MERCHANT")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持的角色");
         }
-        userRepository.findByUsername(request.getUsername()).ifPresent(u -> {
+        if (userQueryMapper.selectByUsername(request.getUsername()) != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
-        });
+        }
+
         String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase();
         registerEmailService.verifyRegisterCode(email, request.getEmailCode());
 
         User user = new User();
         user.setUsername(request.getUsername());
-        user.setPassword(passwordEncoder.encode(request.getPassword()));
+        user.setPassword(passwordHashService.encode(request.getPassword()));
         user.setEmail(email);
         user.setRole(role);
-        user.setMerchantStatus(role.equals("MERCHANT") ? "PENDING" : "NONE");
+        user.setAccountStatus("ACTIVE");
+        user.setMerchantStatus(role.equals("MERCHANT") ? "UNREVIEWED" : "NONE");
         user.setWalletBalance(java.math.BigDecimal.valueOf(50));
-        userRepository.save(user);
+        userQueryMapper.insert(user);
 
-        // 自动登录
         LoginRequest loginRequest = new LoginRequest();
         loginRequest.setUsername(request.getUsername());
         loginRequest.setPassword(request.getPassword());
-        return login(loginRequest, session, null, true);
+        return login(loginRequest, null, true);
     }
 
     @Transactional
@@ -170,21 +161,23 @@ public class AuthService {
         if (oldPassword == null || oldPassword.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "旧密码不能为空");
         }
-        User user = userRepository.findById(current.getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在"));
-        if (!passwordEncoder.matches(oldPassword, user.getPassword())) {
+
+        User user = userQueryMapper.selectById(current.getId());
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在");
+        }
+        if (!passwordHashService.matches(oldPassword, user.getPassword())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "旧密码错误");
         }
-        user.setPassword(passwordEncoder.encode(newPassword));
-        userRepository.save(user);
+
+        user.setPassword(passwordHashService.encode(newPassword));
+        userQueryMapper.update(user);
     }
 
-    private void recordLogin(User user, String username, boolean success, String ip) {
-        com.example.demo.model.LoginLog log = new com.example.demo.model.LoginLog();
-        log.setUser(user);
-        log.setUsername(username);
-        log.setIp(ip);
-        log.setSuccess(success);
-        loginLogRepository.save(log);
+    private String normalizeAccountStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return "ACTIVE";
+        }
+        return status.trim().toUpperCase();
     }
 }

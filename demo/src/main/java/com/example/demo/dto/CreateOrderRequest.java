@@ -19,10 +19,10 @@ public class CreateOrderRequest {
     @NotBlank
     private String address;
 
-    // 可选：从地址簿选择的地址ID，后台校验归属并回填
+    // 可选：从地址簿选择的地址 ID，后端会校验归属并回填
     private Long addressId;
 
-    // 支付方式：WALLET 或 ALIPAY
+    // 支付方式：仅支持 ALIPAY
     private String payMethod;
 
     @NotEmpty

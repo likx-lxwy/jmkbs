@@ -12,11 +12,27 @@ public class OrderResponse {
     private List<OrderLine> items;
     private java.time.LocalDateTime createdAt;
     private String payMethod;
+    private String refundReason;
+    private String buyerName;
+    private String merchantName;
+    private Long refundChatCount;
+    private Integer merchantRating;
+    private String merchantReview;
+    private java.time.LocalDateTime merchantReviewedAt;
+    private boolean merchantReviewed;
 
     public OrderResponse() {
     }
 
-    public OrderResponse(Long orderId, String orderNumber, String status, BigDecimal totalAmount, List<OrderLine> items, java.time.LocalDateTime createdAt, String payMethod) {
+    public OrderResponse(Long orderId, String orderNumber, String status, BigDecimal totalAmount, List<OrderLine> items, java.time.LocalDateTime createdAt, String payMethod, String refundReason) {
+        this(orderId, orderNumber, status, totalAmount, items, createdAt, payMethod, refundReason, null, null, 0L, null, null, null, false);
+    }
+
+    public OrderResponse(Long orderId, String orderNumber, String status, BigDecimal totalAmount, List<OrderLine> items, java.time.LocalDateTime createdAt, String payMethod, String refundReason, String buyerName, String merchantName, Long refundChatCount) {
+        this(orderId, orderNumber, status, totalAmount, items, createdAt, payMethod, refundReason, buyerName, merchantName, refundChatCount, null, null, null, false);
+    }
+
+    public OrderResponse(Long orderId, String orderNumber, String status, BigDecimal totalAmount, List<OrderLine> items, java.time.LocalDateTime createdAt, String payMethod, String refundReason, String buyerName, String merchantName, Long refundChatCount, Integer merchantRating, String merchantReview, java.time.LocalDateTime merchantReviewedAt, boolean merchantReviewed) {
         this.orderId = orderId;
         this.orderNumber = orderNumber;
         this.status = status;
@@ -24,6 +40,14 @@ public class OrderResponse {
         this.items = items;
         this.createdAt = createdAt;
         this.payMethod = payMethod;
+        this.refundReason = refundReason;
+        this.buyerName = buyerName;
+        this.merchantName = merchantName;
+        this.refundChatCount = refundChatCount;
+        this.merchantRating = merchantRating;
+        this.merchantReview = merchantReview;
+        this.merchantReviewedAt = merchantReviewedAt;
+        this.merchantReviewed = merchantReviewed;
     }
 
     public Long getOrderId() {
@@ -80,6 +104,70 @@ public class OrderResponse {
 
     public void setPayMethod(String payMethod) {
         this.payMethod = payMethod;
+    }
+
+    public String getRefundReason() {
+        return refundReason;
+    }
+
+    public void setRefundReason(String refundReason) {
+        this.refundReason = refundReason;
+    }
+
+    public String getBuyerName() {
+        return buyerName;
+    }
+
+    public void setBuyerName(String buyerName) {
+        this.buyerName = buyerName;
+    }
+
+    public String getMerchantName() {
+        return merchantName;
+    }
+
+    public void setMerchantName(String merchantName) {
+        this.merchantName = merchantName;
+    }
+
+    public Long getRefundChatCount() {
+        return refundChatCount;
+    }
+
+    public void setRefundChatCount(Long refundChatCount) {
+        this.refundChatCount = refundChatCount;
+    }
+
+    public Integer getMerchantRating() {
+        return merchantRating;
+    }
+
+    public void setMerchantRating(Integer merchantRating) {
+        this.merchantRating = merchantRating;
+    }
+
+    public String getMerchantReview() {
+        return merchantReview;
+    }
+
+    public void setMerchantReview(String merchantReview) {
+        this.merchantReview = merchantReview;
+    }
+
+    public java.time.LocalDateTime getMerchantReviewedAt() {
+        return merchantReviewedAt;
+    }
+
+    public void setMerchantReviewedAt(java.time.LocalDateTime merchantReviewedAt) {
+        this.merchantReviewedAt = merchantReviewedAt;
+    }
+
+    public boolean isMerchantReviewed() {
+        return merchantReviewed;
+    }
+
+    public void setMerchantReviewed(boolean merchantReviewed) {
+        this.merchantReviewed = merchantReviewed;
     }
 
     public static class OrderLine {

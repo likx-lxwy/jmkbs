@@ -8,9 +8,9 @@ import com.example.demo.dto.RegisterRequest;
 import com.example.demo.service.AuthService;
 import com.example.demo.service.CaptchaService;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -40,9 +40,9 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public LoginResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest, HttpSession session) {
+    public LoginResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest) {
         String ip = httpRequest.getRemoteAddr();
-        return authService.login(request, session, ip);
+        return authService.login(request, ip);
     }
 
     @PostMapping("/email-code")
@@ -51,17 +51,15 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public LoginResponse register(@Valid @RequestBody RegisterRequest request, HttpSession session) {
-        return authService.register(request, session);
+    public LoginResponse register(@Valid @RequestBody RegisterRequest request) {
+        return authService.register(request);
     }
 
     @PostMapping("/logout")
-    public org.springframework.http.ResponseEntity<Void> logout(HttpServletRequest request, HttpSession session) {
-        String token = request.getHeader("X-Auth-Token");
-        authService.logout(token, session);
-        return org.springframework.http.ResponseEntity.status(302)
-                .header("Location", "/")
-                .build();
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public ResponseEntity<Void> logout(HttpServletRequest request) {
+        authService.logout(resolveToken(request));
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/password")
@@ -70,5 +68,13 @@ public class AuthController {
         String oldPwd = body == null ? null : body.get("oldPassword");
         String newPwd = body == null ? null : body.get("newPassword");
         authService.changePassword(request, oldPwd, newPwd);
+    }
+
+    private String resolveToken(HttpServletRequest request) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            return authorization.substring(7).trim();
+        }
+        return request.getHeader("X-Auth-Token");
     }
 }

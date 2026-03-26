@@ -18,7 +18,7 @@ public class AlipaySigner {
     public static String sign(Map<String, String> params, String privateKeyPem) throws Exception {
         Map<String, String> copy = new TreeMap<>(params);
         copy.remove("sign");
-        // 保留 sign_type 参与签名，确保与网关验证串一致
+        // Alipay page-pay request signing keeps sign_type in the signed payload.
         String content = buildSignContent(copy);
         Signature signature = Signature.getInstance("SHA256withRSA");
         signature.initSign(loadPrivateKey(privateKeyPem));
@@ -51,11 +51,11 @@ public class AlipaySigner {
     }
 
     private static PrivateKey loadPrivateKey(String pem) throws Exception {
-        String cleaned = pem.replace("-----BEGIN PRIVATE KEY-----", "")
+        String cleaned = normalizePemBase64(pem
+                .replace("-----BEGIN PRIVATE KEY-----", "")
                 .replace("-----END PRIVATE KEY-----", "")
                 .replace("-----BEGIN RSA PRIVATE KEY-----", "")
-                .replace("-----END RSA PRIVATE KEY-----", "")
-                .replaceAll("\\s+", "");
+                .replace("-----END RSA PRIVATE KEY-----", ""));
         byte[] decoded = Base64.getDecoder().decode(cleaned);
         try {
             // PKCS8
@@ -70,12 +70,25 @@ public class AlipaySigner {
     }
 
     private static PublicKey loadPublicKey(String pem) throws Exception {
-        String cleaned = pem.replace("-----BEGIN PUBLIC KEY-----", "")
-                .replace("-----END PUBLIC KEY-----", "")
-                .replaceAll("\\s+", "");
+        String cleaned = normalizePemBase64(pem
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", ""));
         byte[] decoded = Base64.getDecoder().decode(cleaned);
         X509EncodedKeySpec keySpec = new X509EncodedKeySpec(decoded);
         return KeyFactory.getInstance("RSA").generatePublic(keySpec);
+    }
+
+    private static String normalizePemBase64(String pemBody) {
+        String cleaned = pemBody.replaceAll("\\s+", "");
+        int firstPadding = cleaned.indexOf('=');
+        if (firstPadding < 0) {
+            return cleaned;
+        }
+        int end = firstPadding;
+        while (end < cleaned.length() && cleaned.charAt(end) == '=') {
+            end++;
+        }
+        return cleaned.substring(0, end);
     }
 
     private static byte[] convertPkcs1ToPkcs8(byte[] pkcs1) {

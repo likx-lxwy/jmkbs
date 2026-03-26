@@ -1,7 +1,6 @@
 package com.example.demo.controller;
 
-import com.example.demo.model.AppSetting;
-import com.example.demo.repository.AppSettingRepository;
+import com.example.demo.config.PlatformConfigProperties;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -16,7 +15,6 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/location")
@@ -24,10 +22,10 @@ import java.util.Optional;
 public class LocationController {
 
     private final RestTemplate restTemplate = new RestTemplate();
-    private final AppSettingRepository appSettingRepository;
+    private final PlatformConfigProperties platformConfigProperties;
 
-    public LocationController(AppSettingRepository appSettingRepository) {
-        this.appSettingRepository = appSettingRepository;
+    public LocationController(PlatformConfigProperties platformConfigProperties) {
+        this.platformConfigProperties = platformConfigProperties;
     }
 
     @GetMapping("/reverse")
@@ -40,16 +38,20 @@ public class LocationController {
         if (fromNominatim != null) {
             return Map.of("address", fromNominatim);
         }
-        throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "逆地理解析失败");
+        throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Reverse geocoding failed");
     }
 
     private String reverseByAmap(double lat, double lng) {
-        Optional<AppSetting> settingOpt = appSettingRepository.findAll().stream().findFirst();
-        String key = settingOpt.map(AppSetting::getMapApiKey).orElse(null);
+        String key = platformConfigProperties.getMapApiKey();
         if (key == null || key.isBlank()) {
             return null;
         }
-        String url = String.format("https://restapi.amap.com/v3/geocode/regeo?key=%s&location=%f,%f&extensions=base&roadlevel=1", key, lng, lat);
+        String url = String.format(
+                "https://restapi.amap.com/v3/geocode/regeo?key=%s&location=%f,%f&extensions=base&roadlevel=1",
+                key,
+                lng,
+                lat
+        );
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.USER_AGENT, "mk-menswear/1.0");
         try {
@@ -72,7 +74,11 @@ public class LocationController {
     }
 
     private String reverseByNominatim(double lat, double lng) {
-        String url = String.format("https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%f&lon=%f&accept-language=zh-CN", lat, lng);
+        String url = String.format(
+                "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%f&lon=%f&accept-language=zh-CN",
+                lat,
+                lng
+        );
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.USER_AGENT, "mk-menswear/1.0");
         try {
@@ -90,12 +96,13 @@ public class LocationController {
 
     @GetMapping("/config")
     public Map<String, String> config() {
-        Optional<AppSetting> settingOpt = appSettingRepository.findAll().stream().findFirst();
-        AppSetting s = settingOpt.orElse(null);
         return Map.of(
-                "mapApiKey", s == null ? "" : Optional.ofNullable(s.getMapApiKey()).orElse(""),
-                "mapJsKey", s == null ? "" : Optional.ofNullable(s.getMapJsKey()).orElse(""),
-                "mapJsSec", s == null ? "" : Optional.ofNullable(s.getMapJsSec()).orElse("")
+                "mapJsKey", emptyIfNull(platformConfigProperties.getMapJsKey()),
+                "mapJsSec", emptyIfNull(platformConfigProperties.getMapJsSec())
         );
+    }
+
+    private String emptyIfNull(String value) {
+        return value == null ? "" : value;
     }
 }

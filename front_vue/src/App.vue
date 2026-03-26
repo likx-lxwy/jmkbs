@@ -1,9 +1,10 @@
-<script setup>
+﻿<script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue';
 import {
   fetchCategories,
   fetchProducts,
-  submitOrder,
+  fetchProductDetail,
+  submitOrderBatch,
   fetchLoginCaptcha,
   login,
   logout,
@@ -13,41 +14,35 @@ import {
   fetchAdminOverview,
   fetchAdminMerchants,
   updateMerchantStatus,
+  fetchAdminUsers,
+  updateAdminUserAccountStatus,
+  deleteAdminUser,
+  getMerchantProfile,
+  saveMerchantProfile,
   fetchAdminOrders,
   uploadImage,
   fetchMyProducts,
   deleteProduct,
   updateProduct,
-  fetchPendingOrders,
-  approveOrder,
-  rejectOrder,
-  approveRefundAdmin,
-  rejectRefundAdmin,
+  approveRefundMerchant,
+  rejectRefundMerchant,
   uploadVideo,
   fetchComments,
   addComment,
-  fetchProductIntro,
-  getAiKey,
-  saveAiKey,
-  aiRecommend,
-  getSettings,
-  setApprovalLevel,
   getWallet,
   recharge,
-  adminWallets,
-  adminAdjustWallet,
   adminResetPassword,
   fetchAdminRevenue,
-  fetchLoginLogs,
-  fetchSystemLogs,
   fetchChat,
   sendChat,
   fetchRecentChat,
-  runTerminal,
+  fetchRefundChat,
+  sendRefundChat,
   fetchPaymentLogs,
   fetchMyOrders,
+  confirmReceiptOrder,
+  submitMerchantOrderReview,
   refundOrder,
-  paySubscription,
   reverseGeocode,
   getLocationConfig,
   fetchAddresses,
@@ -56,12 +51,16 @@ import {
   deleteAddress,
   setDefaultAddress,
   changeMyPassword,
-  createAlipayPayUrl
+  createAlipayPayUrl,
+  confirmAlipayReturn
 } from './api';
+
+const ALIPAY_PENDING_STORAGE_KEY = 'mk_alipay_pending';
 
 const categories = ref([]);
 const products = ref([]);
 const activeCategory = ref('all');
+const selectedStoreId = ref('all');
 const loadingProducts = ref(false);
 const cart = ref([]);
 const submitting = ref(false);
@@ -110,6 +109,16 @@ const registerForm = reactive({
 const registerEmailSending = ref(false);
 const registerEmailCooldown = ref(0);
 let registerEmailTimer = null;
+const merchantProfileSubmitting = ref(false);
+const merchantProfileLoading = ref(false);
+const merchantProfile = reactive({
+  storeName: '',
+  contactName: '',
+  contactPhone: '',
+  businessAddress: '',
+  licenseNumber: '',
+  description: ''
+});
 
 const productForm = reactive({
   name: '',
@@ -223,60 +232,52 @@ const myProductPageSize = ref(6);
 const showEditModal = ref(false);
 const editingProductOriginal = ref(null);
 const walletBalance = ref(0);
-const subscriptionUntil = ref(null);
 const showRechargeModal = ref(false);
 const rechargeAmount = ref(0);
 const paymentLogs = ref([]);
 const paymentLogsLoading = ref(false);
-const pendingOrders = ref([]);
-const approvalLevel = ref('LOW');
-const adminWalletUsers = ref([]);
+const adminUsers = ref([]);
+const adminUsersLoading = ref(false);
+const adminUserSearch = ref('');
+const adminUserStatusFilter = ref('ALL');
 const adminRevenueLogs = ref([]);
-const loginLogs = ref([]);
-const loginLogPage = ref(1);
-const loginLogSize = ref(10);
-const loginLogTotal = computed(() => Math.max(1, Math.ceil(loginLogs.value.length / loginLogSize.value)));
-const pagedLoginLogs = computed(() => {
-  const start = (loginLogPage.value - 1) * loginLogSize.value;
-  return loginLogs.value.slice(start, start + loginLogSize.value);
-});
-const systemLogs = ref('');
-const systemLogLines = ref(200);
 const recentChats = ref([]);
-const showTerminalModal = ref(false);
-const terminalCommand = ref('');
-const terminalPassword = ref('');
-const terminalSignature = ref('');
-const terminalOutput = ref('');
-const terminalUnlocked = ref(false);
-const terminalPrompt = 'admin@mk:~$';
 const pwdModalUser = ref(null);
 const pwdModalValue = ref('');
-const TERMINAL_SECRET = '962e9179607aa152eb7bd0598381bc9d440f9006289d3c6c0f16ce95ba92c58f';
 const myOrders = ref([]);
 const myOrdersLoading = ref(false);
+const myOrderSearch = ref('');
+const myOrderStatusFilter = ref('ALL');
+const myOrderPage = ref(1);
+const myOrderPageSize = ref(6);
 const refundModal = reactive({
   orderId: null,
   reason: ''
 });
 const showRefundModal = ref(false);
 const refundSubmitting = ref(false);
+const refundReviewSubmitting = ref(false);
+const receiptSubmitting = ref(false);
+const reviewModal = reactive({
+  orderId: null,
+  orderNumber: '',
+  merchantName: '',
+  rating: 5,
+  content: ''
+});
+const showReviewModal = ref(false);
+const reviewSubmitting = ref(false);
+const reviewError = ref('');
+const repayOrderId = ref(null);
 const refundError = ref('');
 const useGeoLoading = ref(false);
 const showMapModal = ref(false);
-const mapApiKey = ref('');
 const mapJsKey = ref('');
 const mapJsSec = ref('');
 const mapPickerLoading = ref(false);
 const mapSelectedPoint = ref(null);
 const mapSelectedAddress = ref('');
 const mapApplyTarget = ref('order'); // 'order' | 'profile'
-const alipayAppId = ref('');
-const alipayPrivateKey = ref('');
-const alipayPublicKey = ref('');
-const alipayGateway = ref('https://openapi.alipaydev.com/gateway.do');
-const alipayReturnUrl = ref('');
-const alipayNotifyUrl = ref('');
 let amapInitPromise = null;
 let amapLoaded = false;
 let amapMap = null;
@@ -302,10 +303,23 @@ const passwordSubmitting = ref(false);
 const showPayModal = ref(false);
 const payModalAddressId = ref(null);
 const payModalPayMethod = ref('ALIPAY');
+const actionDialog = reactive({
+  visible: false,
+  title: '',
+  message: '',
+  confirmText: '确定',
+  cancelText: '取消',
+  showCancel: true,
+  variant: 'info'
+});
+let actionDialogResolver = null;
 const currentChat = reactive({
+  mode: 'product',
   productId: null,
+  orderId: null,
   targetId: null,
-  productName: '',
+  title: '',
+  subtitle: '',
   targetName: '',
   messages: [],
   content: ''
@@ -317,38 +331,31 @@ const orderPage = ref(1);
 const orderPageSize = ref(8);
 const loginNotice = ref('');
 const registerNotice = ref('');
-const merchantSearch = ref('');
 const orderSearch = ref('');
 const lowStock = ref([]);
 const lowStockLoading = ref(false);
 const lowStockPage = ref(1);
 const lowStockPageSize = ref(6);
 const lowStockThreshold = ref(5);
-const selectedMerchants = ref([]);
 const uploadingImage = ref(false);
 const editingProductId = ref(null);
 const productFormVideoFile = ref(null);
 const detailProduct = ref(null);
 const detailComments = ref([]);
-const detailIntro = ref('');
 const detailLoading = ref(false);
-const detailAiLoading = ref(false);
 const detailCommentInput = ref('');
-const detailShowAi = ref(false);
-const aiInput = ref('');
-const aiResult = ref('');
-const aiLoading = ref(false);
-const aiKey = ref('');
-const aiError = ref('');
-const aiMessages = ref([]);
-const aiToast = reactive({ visible: false, message: '', type: 'info' });
+const toastState = reactive({ visible: false, message: '', type: 'info' });
 
 const isLoggedIn = computed(() => !!auth.token);
 const isMerchantApproved = computed(() => auth.role === 'MERCHANT' && auth.merchantStatus === 'APPROVED');
-const isMerchantBlocked = computed(() => auth.role === 'MERCHANT' && auth.merchantStatus !== 'APPROVED');
-const merchantBlockVariant = computed(() => (auth.merchantStatus === 'BANNED' ? 'BANNED' : 'PENDING'));
+const isMerchantBanned = computed(() => auth.role === 'MERCHANT' && auth.merchantStatus === 'BANNED');
+const isMerchantPendingReview = computed(() =>
+  auth.role === 'MERCHANT' && ['UNREVIEWED', 'PENDING'].includes((auth.merchantStatus || '').toUpperCase())
+);
 const hasPendingMerchantBadge = computed(() => isAdmin.value && Number(adminOverview.pendingMerchants || 0) > 0);
 const isAdmin = computed(() => auth.role === 'ADMIN');
+const isBuyerOrderView = computed(() => auth.role !== 'MERCHANT');
+const hasUserWalletUi = computed(() => auth.role !== 'USER' && !isMerchantPendingReview.value);
 const merchantStatusLabel = computed(() => {
   switch (auth.merchantStatus) {
     case 'APPROVED':
@@ -356,9 +363,9 @@ const merchantStatusLabel = computed(() => {
     case 'PENDING':
       return '待审核';
     case 'UNREVIEWED':
-      return '未审核';
+      return '待提交资料';
     case 'BANNED':
-      return '被封禁';
+      return '已封禁';
     default:
       return '普通用户';
   }
@@ -368,6 +375,50 @@ const cartCount = computed(() => cart.value.reduce((sum, item) => sum + item.qua
 const cartTotal = computed(() =>
   cart.value.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0).toFixed(2)
 );
+const cartMerchantGroups = computed(() => {
+  const groups = new Map();
+  cart.value.forEach((item) => {
+    const ownerId = item.owner?.id || `merchant-${item.id}`;
+    const ownerName = item.owner?.username || '商家';
+    if (!groups.has(ownerId)) {
+      groups.set(ownerId, {
+        ownerId,
+        ownerName,
+        items: [],
+        count: 0,
+        subtotal: 0
+      });
+    }
+    const group = groups.get(ownerId);
+    group.items.push(item);
+    group.count += Number(item.quantity || 0);
+    group.subtotal += Number(item.price || 0) * Number(item.quantity || 0);
+  });
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    subtotalText: group.subtotal.toFixed(2),
+    previewText: group.items
+      .map((item) => `${item.name}${item.sizeLabel ? ` / ${item.sizeLabel}` : ''}`)
+      .slice(0, 3)
+      .join('、')
+  }));
+});
+const cartMerchantCount = computed(() => cartMerchantGroups.value.length);
+const checkoutPreviewAddress = computed(() =>
+  addressList.value.find((addr) => addr.id === selectedAddressId.value)
+  || addressList.value.find((addr) => addr.default)
+  || addressList.value[0]
+  || null
+);
+const selectedPayAddress = computed(() =>
+  addressList.value.find((addr) => addr.id === payModalAddressId.value) || null
+);
+const selectedPayMethodMeta = computed(() => ({
+  label: '支付宝沙箱支付',
+  desc: cartMerchantCount.value > 1
+    ? `将拆分为 ${cartMerchantCount.value} 笔商家订单，并合并拉起一次支付宝沙箱支付`
+    : '支付成功后订单进入平台托管，确认收货后再结算给商家'
+}));
 const sizeTableStock = computed(() => {
   const rows = normalizeSizeRows();
   if (rows.length) {
@@ -376,15 +427,37 @@ const sizeTableStock = computed(() => {
   return Number(productForm.stock || 0);
 });
 
-const merchantSubActive = computed(() => {
-  if (!subscriptionUntil.value) return false;
-  return new Date(subscriptionUntil.value) >= new Date();
+const catalogStoreOptions = computed(() => {
+  const stores = new Map();
+  products.value.forEach((product) => {
+    const ownerId = product?.owner?.id;
+    if (!ownerId) return;
+    const key = String(ownerId);
+    if (!stores.has(key)) {
+      stores.set(key, {
+        id: key,
+        name: resolveStoreName(product),
+        rating: Number(product?.merchantRatingAverage || 0),
+        productCount: 0
+      });
+    }
+    stores.get(key).productCount += 1;
+  });
+  return Array.from(stores.values()).sort((a, b) =>
+    a.rating - b.rating || a.name.localeCompare(b.name, 'zh-CN')
+  );
+});
+const filteredCatalogProducts = computed(() => {
+  if (selectedStoreId.value === 'all') {
+    return products.value;
+  }
+  return products.value.filter((product) => String(product?.owner?.id || '') === String(selectedStoreId.value));
 });
 const pagedProducts = computed(() => {
   const start = (productPage.value - 1) * productPageSize.value;
-  return products.value.slice(start, start + productPageSize.value);
+  return filteredCatalogProducts.value.slice(start, start + productPageSize.value);
 });
-const productTotalPages = computed(() => Math.max(1, Math.ceil(products.value.length / productPageSize.value || 1)));
+const productTotalPages = computed(() => Math.max(1, Math.ceil(filteredCatalogProducts.value.length / productPageSize.value || 1)));
 const pagedMyProducts = computed(() => {
   const start = (myProductPage.value - 1) * myProductPageSize.value;
   return myProducts.value.slice(start, start + myProductPageSize.value);
@@ -403,9 +476,7 @@ const pagedOrders = computed(() => {
 });
 const orderTotalPages = computed(() => Math.max(1, Math.ceil(filteredOrders.value.length / orderPageSize.value || 1)));
 const filteredMerchants = computed(() => {
-  const q = merchantSearch.value.trim().toLowerCase();
-  if (!q) return adminMerchants.value;
-  return adminMerchants.value.filter((m) => (m.username || '').toLowerCase().includes(q));
+  return adminMerchants.value;
 });
 const filteredOrders = computed(() => {
   const q = orderSearch.value.trim().toLowerCase();
@@ -418,85 +489,223 @@ const pagedLowStock = computed(() => {
 });
 const lowStockTotalPages = computed(() => Math.max(1, Math.ceil(lowStock.value.length / lowStockPageSize.value || 1)));
 const currentPageLabel = computed(() => {
+  if (auth.role === 'MERCHANT' && currentPage.value === 'profile') {
+    return '商家资料';
+  }
   const map = {
     catalog: '商品',
-    profile: '个人主页',
+    checkout: '结算',
+    profile: '个人中心',
     orders: '订单',
     walletUser: '钱包',
-    ai: 'AI 帮你选',
     chat: '聊天',
     merchantUpload: '上架商品',
     myShop: '我的店铺',
+    merchantStock: '库存告警',
     adminOverview: '概览',
+    adminUsers: '用户',
     adminMerchants: '商家审核',
     adminOrders: '订单管理',
-    adminRevenue: '收益',
-    adminStock: '库存告警',
-    adminApproval: '交易审核',
-    adminWallet: '钱包',
-    adminLogs: '日志',
-    adminTerminal: '终端',
-    adminAi: 'AI 配置'
+    adminRevenue: '收益'
   };
   return map[currentPage.value] || '欢迎';
 });
+const topAuthHint = computed(() => {
+  if (auth.role === 'USER') {
+    return '仅支持支付宝沙箱下单';
+  }
+  if (auth.role === 'MERCHANT' && !isMerchantApproved.value) {
+    return `审核状态：${merchantStatusLabel.value}`;
+  }
+  if (isAdmin.value) {
+    return `平台余额 ￥${Number(walletBalance.value).toFixed(2)}`;
+  }
+  return `余额 ￥${Number(walletBalance.value).toFixed(2)}`;
+});
+const supportedPages = new Set([
+  'catalog',
+  'checkout',
+  'profile',
+  'orders',
+  'walletUser',
+  'chat',
+  'merchantUpload',
+  'myShop',
+  'merchantStock',
+  'adminOverview',
+  'adminUsers',
+  'adminMerchants',
+  'adminOrders',
+  'adminRevenue'
+]);
+const myOrdersSorted = computed(() =>
+  [...myOrders.value].sort((a, b) => {
+    const timeA = a?.createdAt ? Number(new Date(a.createdAt).getTime()) || 0 : 0;
+    const timeB = b?.createdAt ? Number(new Date(b.createdAt).getTime()) || 0 : 0;
+    return timeB - timeA;
+  })
+);
+const myOrderStatusTabs = computed(() => {
+  const options = [
+    { key: 'ALL', label: '全部订单' },
+    { key: 'PENDING_ACTION', label: isBuyerOrderView.value ? '待我处理' : '待商家处理' },
+    { key: 'ESCROW', label: '托管中' },
+    { key: 'REFUND', label: '退款相关' },
+    { key: 'DONE', label: '已完成' }
+  ];
+  return options.map((option) => ({
+    ...option,
+    count: myOrdersSorted.value.filter((order) => matchesMyOrderFilter(order, option.key)).length
+  }));
+});
+const filteredMyOrders = computed(() => {
+  const q = myOrderSearch.value.trim().toLowerCase();
+  return myOrdersSorted.value.filter((order) => {
+    if (!matchesMyOrderFilter(order, myOrderStatusFilter.value)) {
+      return false;
+    }
+    if (!q) {
+      return true;
+    }
+    const haystack = [
+      order?.orderNumber,
+      formatOrderStatus(order?.status),
+      order?.refundReason,
+      formatPayMethodShort(order?.payMethod),
+      formatOrderItemPreview(order)
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(q);
+  });
+});
+const pagedMyOrders = computed(() => {
+  const start = (myOrderPage.value - 1) * myOrderPageSize.value;
+  return filteredMyOrders.value.slice(start, start + myOrderPageSize.value);
+});
+const myOrderTotalPages = computed(() => Math.max(1, Math.ceil(filteredMyOrders.value.length / myOrderPageSize.value || 1)));
+const myOrderSummary = computed(() => {
+  const totalCount = myOrdersSorted.value.length;
+  const totalAmount = myOrdersSorted.value.reduce((sum, order) => sum + Number(order?.totalAmount || 0), 0);
+  const pendingActionCount = myOrdersSorted.value.filter((order) =>
+    isBuyerOrderView.value ? needsBuyerAction(order?.status) : needsMerchantAction(order?.status)
+  ).length;
+  const escrowAmount = myOrdersSorted.value
+    .filter((order) => isEscrowOrder(order?.status))
+    .reduce((sum, order) => sum + Number(order?.totalAmount || 0), 0);
+  const refundCount = myOrdersSorted.value.filter((order) =>
+    ['REFUND_REQUESTED', 'REFUNDED', 'REJECTED'].includes(normalizeOrderStatus(order?.status))
+  ).length;
+  return {
+    totalCount,
+    totalAmount: totalAmount.toFixed(2),
+    pendingActionCount,
+    pendingActionLabel: isBuyerOrderView.value ? '待我处理' : '待商家处理',
+    escrowAmount: escrowAmount.toFixed(2),
+    refundCount
+  };
+});
+const visiblePaymentLogs = computed(() => paymentLogs.value);
+const filteredAdminUsers = computed(() => {
+  const query = adminUserSearch.value.trim().toLowerCase();
+  return adminUsers.value.filter((user) => {
+    const normalizedStatus = normalizeAccountStatus(user?.accountStatus);
+    if (adminUserStatusFilter.value !== 'ALL' && normalizedStatus !== adminUserStatusFilter.value) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    const haystack = [
+      user?.username,
+      user?.email,
+      user?.role,
+      user?.merchantStatus,
+      user?.merchantStoreName,
+      renderAccountStatusLabel(user?.accountStatus)
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+});
 
 onMounted(() => {
-  if (!isLoggedIn.value) {
-    currentPage.value = 'catalog';
-    localStorage.setItem('mk_page', 'catalog');
+  const nextPage = normalizePage(currentPage.value);
+  if (nextPage !== currentPage.value) {
+    currentPage.value = nextPage;
+    localStorage.setItem('mk_page', nextPage);
   }
   loadMapConfig();
   loadCategories();
   loadProducts();
-  if (auth.role === 'MERCHANT') {
+  if (auth.role === 'MERCHANT' && isMerchantApproved.value) {
     loadMyProducts();
+    if (currentPage.value === 'merchantStock') {
+      loadLowStock();
+    }
   }
   if (isAdmin.value) {
     loadAdminAll();
-    loadApprovalSettings();
-    loadPendingOrders();
-    loadAdminWallets();
-    loadLoginLogs();
-    loadSystemLogs();
+    if (currentPage.value === 'adminUsers') {
+      loadAdminUsers();
+    }
+    if (currentPage.value === 'adminRevenue') {
+      loadAdminRevenue();
+    }
   }
   if (isLoggedIn.value) {
-    loadWallet();
-    loadPaymentLogs();
-    loadRecentChats();
-    loadAddresses();
+    refreshPaymentSideData();
+    if (!isMerchantPendingReview.value) {
+      loadRecentChats();
+    }
+    if (auth.role === 'MERCHANT') {
+      loadMerchantProfile();
+    } else {
+      loadAddresses();
+    }
   }
-  if (isAdmin.value) {
-    loadAiKey();
-  }
+  window.addEventListener('focus', handleWindowFocus);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  syncPendingAlipayState();
 });
 
 onBeforeUnmount(() => {
   clearRegisterEmailTimer();
+  window.removeEventListener('focus', handleWindowFocus);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
 });
 
 watch(isAdmin, (value) => {
   if (value) {
     currentPage.value = 'adminOverview';
     loadAdminAll();
+    loadAdminUsers();
   } else if (currentPage.value.startsWith('admin')) {
     currentPage.value = 'catalog';
   }
   localStorage.setItem('mk_page', currentPage.value);
 });
 
+watch(() => auth.merchantStatus, () => {
+  const nextPage = normalizePage(currentPage.value);
+  if (nextPage !== currentPage.value) {
+    currentPage.value = nextPage;
+    localStorage.setItem('mk_page', nextPage);
+  }
+});
+
+watch([myOrderSearch, myOrderStatusFilter, myOrders], () => {
+  myOrderPage.value = 1;
+});
+
 async function loadMapConfig() {
   try {
     const cfg = await getLocationConfig();
-    mapApiKey.value = cfg.mapApiKey || '';
     mapJsKey.value = cfg.mapJsKey || '';
     mapJsSec.value = cfg.mapJsSec || '';
-    alipayAppId.value = cfg.alipayAppId || '';
-    alipayPrivateKey.value = cfg.alipayPrivateKey || '';
-    alipayPublicKey.value = cfg.alipayPublicKey || '';
-    alipayGateway.value = cfg.alipayGateway || 'https://openapi.alipaydev.com/gateway.do';
-    alipayReturnUrl.value = cfg.alipayReturnUrl || '';
-    alipayNotifyUrl.value = cfg.alipayNotifyUrl || '';
   } catch (e) {
     // ignore
   }
@@ -514,6 +723,9 @@ async function loadProducts(categoryId = null) {
   loadingProducts.value = true;
   try {
     products.value = await fetchProducts(categoryId || undefined);
+    if (selectedStoreId.value !== 'all' && !products.value.some((product) => String(product?.owner?.id || '') === String(selectedStoreId.value))) {
+      selectedStoreId.value = 'all';
+    }
   } catch (err) {
     setNotice('error', '无法加载商品列表');
   } finally {
@@ -532,7 +744,7 @@ async function loadMyProducts() {
 }
 
 async function loadAdminAll() {
-  await Promise.all([loadAdminOverview(), loadAdminMerchants(adminFilters.merchantStatus), loadAdminOrders()]);
+  await Promise.all([loadAdminOverview(), loadAdminMerchants(adminFilters.merchantStatus), loadAdminOrders(), loadWallet()]);
 }
 
 async function loadAdminOverview() {
@@ -572,71 +784,61 @@ async function loadAdminOrders() {
   }
 }
 
-async function loadPendingOrders() {
-  try {
-    pendingOrders.value = await fetchPendingOrders();
-  } catch (err) {
-    setNotice('error', '待审核订单加载失败');
+async function reviewRefundByMerchant(order, pass) {
+  const orderId = order?.orderId || order?.id;
+  if (!orderId || refundReviewSubmitting.value) return;
+  const actionText = pass ? '同意' : '驳回';
+  const ok = await openActionDialog({
+    title: `${actionText}退款申请`,
+    message: pass
+      ? `确认同意订单 ${order.orderNumber} 的退款申请吗？审核通过后系统会按订单状态执行退款。`
+      : `确认驳回订单 ${order.orderNumber} 的退款申请吗？驳回后订单会恢复为原状态。`,
+    confirmText: actionText,
+    cancelText: '取消',
+    variant: pass ? 'warning' : 'info'
+  });
+  if (!ok) {
+    return;
   }
-}
 
-async function loadApprovalSettings() {
-  try {
-    const s = await getSettings();
-    approvalLevel.value = (s?.orderApprovalLevel || 'LOW').toUpperCase();
-  } catch (err) {
-    approvalLevel.value = 'LOW';
-  }
-}
-
-async function saveApprovalLevel(level) {
-  try {
-    const s = await setApprovalLevel(level);
-    approvalLevel.value = (s?.orderApprovalLevel || level).toUpperCase();
-    setNotice('success', '审核档位已更新');
-    await loadPendingOrders();
-  } catch (err) {
-    setNotice('error', '保存审核档位失败');
-  }
-}
-
-async function approvePending(id, pass) {
+  refundReviewSubmitting.value = true;
   try {
     if (pass) {
-      await approveOrder(id);
-      setNotice('success', '已通过');
+      await approveRefundMerchant(orderId);
+      setNotice('success', '已同意退款，系统已完成退款');
     } else {
-      await rejectOrder(id);
-      setNotice('info', '已拒绝并退款');
+      await rejectRefundMerchant(orderId);
+      setNotice('info', '已驳回退款申请');
     }
-    await Promise.all([loadPendingOrders(), loadAdminOrders()]);
+    await Promise.all([loadMyOrders(), refreshPaymentSideData()]);
   } catch (err) {
     const msg = err?.response?.data?.message || '操作失败';
     setNotice('error', msg);
+  } finally {
+    refundReviewSubmitting.value = false;
   }
 }
 
-async function approveRefundAdminAction(id, pass) {
+async function loadAdminUsers() {
+  if (!isAdmin.value) return;
+  adminUsersLoading.value = true;
   try {
-    if (pass) {
-      await approveRefundAdmin(id);
-      setNotice('success', '退款已同意');
-    } else {
-      await rejectRefundAdmin(id);
-      setNotice('info', '已驳回退款');
-    }
-    await loadAdminOrders();
+    adminUsers.value = await fetchAdminUsers();
   } catch (err) {
-    const msg = err?.response?.data?.message || '操作失败';
-    setNotice('error', msg);
+    setNotice('error', '用户列表加载失败');
+  } finally {
+    adminUsersLoading.value = false;
   }
 }
 
 async function loadWallet() {
+  if (!hasUserWalletUi.value) {
+    walletBalance.value = 0;
+    return;
+  }
   try {
     const res = await getWallet();
     walletBalance.value = res.balance || 0;
-    subscriptionUntil.value = res.subscriptionPaidUntil || null;
   } catch (err) {
     // ignore
   }
@@ -667,8 +869,12 @@ async function loadMyOrders() {
 }
 
 async function doRecharge() {
+  if (auth.role === 'USER') {
+    setNotice('warning', '普通用户下单仅支持支付宝沙箱支付，暂不提供钱包充值');
+    return;
+  }
   if (!rechargeAmount.value || Number(rechargeAmount.value) <= 0) {
-    setNotice('warning', '请输入大于0的金额');
+    setNotice('warning', '请输入大于 0 的金额');
     return;
   }
   try {
@@ -683,32 +889,59 @@ async function doRecharge() {
   }
 }
 
-async function loadAdminWallets() {
-  if (!isAdmin.value) return;
-  try {
-    adminWalletUsers.value = await adminWallets();
-  } catch (err) {
-    // ignore
-  }
-}
-
-async function adjustUserWallet(userId, delta) {
-  try {
-    await adminAdjustWallet(userId, Number(delta));
-    setNotice('success', '余额已调整');
-    await loadAdminWallets();
-  } catch (err) {
-    const msg = err?.response?.data?.message || '调整失败';
-    setNotice('error', msg);
-  }
-}
-
 async function resetUserPassword(userId, password) {
   try {
     await adminResetPassword(userId, password);
     setNotice('success', '密码已修改');
+    await loadAdminUsers();
   } catch (err) {
     const msg = err?.response?.data?.message || '修改失败';
+    setNotice('error', msg);
+  }
+}
+
+async function toggleAdminUserBan(user) {
+  if (!canManageAdminUser(user)) return;
+  const nextStatus = normalizeAccountStatus(user.accountStatus) === 'BANNED' ? 'ACTIVE' : 'BANNED';
+  const actionText = nextStatus === 'BANNED' ? '封禁' : '解封';
+  const ok = await openActionDialog({
+    title: `${actionText}账号`,
+    message: nextStatus === 'BANNED'
+      ? `确认封禁用户 ${user.username} 吗？封禁后该账号将无法登录和访问系统。`
+      : `确认解封用户 ${user.username} 吗？解封后该账号可以重新登录。`,
+    confirmText: actionText,
+    cancelText: '取消',
+    variant: nextStatus === 'BANNED' ? 'warning' : 'success'
+  });
+  if (!ok) return;
+
+  try {
+    await updateAdminUserAccountStatus(user.id, nextStatus);
+    setNotice('success', `账号已${actionText}`);
+    await refreshAdminUserManagement();
+  } catch (err) {
+    const msg = err?.response?.data?.message || `${actionText}失败`;
+    setNotice('error', msg);
+  }
+}
+
+async function removeAdminUser(user) {
+  if (!canManageAdminUser(user)) return;
+  const ok = await openActionDialog({
+    title: '删除账号',
+    message: `确认删除用户 ${user.username} 吗？该操作会将账号标记为已删除，并阻止其继续登录。`,
+    confirmText: '删除',
+    cancelText: '取消',
+    variant: 'error'
+  });
+  if (!ok) return;
+
+  try {
+    await deleteAdminUser(user.id);
+    setNotice('success', '账号已删除');
+    await refreshAdminUserManagement();
+  } catch (err) {
+    const msg = err?.response?.data?.message || '删除失败';
     setNotice('error', msg);
   }
 }
@@ -716,64 +949,21 @@ async function resetUserPassword(userId, password) {
 async function loadAdminRevenue() {
   if (!isAdmin.value) return;
   try {
-    adminRevenueLogs.value = await fetchAdminRevenue();
+    const [logs] = await Promise.all([fetchAdminRevenue(), loadWallet()]);
+    adminRevenueLogs.value = logs || [];
   } catch (err) {
     setNotice('error', '收益记录加载失败');
   }
 }
 
-async function payMerchantSubscription() {
-  try {
-    const res = await paySubscription();
-    walletBalance.value = res.balance || walletBalance.value;
-    subscriptionUntil.value = res.subscriptionPaidUntil || subscriptionUntil.value;
-    setNotice('success', '开店费已缴纳，期限已更新');
-  } catch (err) {
-    const msg = err?.response?.data?.message || '缴费失败';
-    setNotice('error', msg);
-  }
-}
-
-async function loadLoginLogs() {
-  if (!isAdmin.value) return;
-  try {
-    loginLogs.value = await fetchLoginLogs();
-    loginLogPage.value = 1;
-  } catch (e) {
-    // ignore
-  }
-}
-
-async function loadSystemLogs() {
-  if (!isAdmin.value) return;
-  try {
-    systemLogs.value = await fetchSystemLogs(systemLogLines.value || 200);
-  } catch (e) {
-    systemLogs.value = '读取失败';
-  }
-}
-
-function downloadSystemLogs() {
-  if (!isAdmin.value) return;
-  fetchSystemLogs(systemLogLines.value || 200)
-    .then((text) => {
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `system-logs-${Date.now()}.log`;
-      a.click();
-      URL.revokeObjectURL(url);
-    })
-    .catch(() => {
-      setNotice('error', '下载失败，可能未登录或无权限');
-    });
-}
 async function loadLowStock() {
   lowStockLoading.value = true;
   try {
-    const data = await fetchProducts();
+    const data = auth.role === 'MERCHANT' ? await fetchMyProducts() : await fetchProducts();
     const threshold = Number(lowStockThreshold.value || 0);
+    if (auth.role === 'MERCHANT') {
+      myProducts.value = data || [];
+    }
     lowStock.value = (data || []).filter((p) => Number(p.stock || 0) <= threshold);
     lowStockPage.value = 1;
   } catch (err) {
@@ -805,32 +995,291 @@ function renderStatusLabel(status) {
     case 'PENDING':
       return '待审核';
     case 'UNREVIEWED':
-      return '未审核';
+      return '待提交资料';
     case 'BANNED':
-      return '被封禁';
+      return '已封禁';
     default:
       return '普通';
   }
 }
 
+function normalizeAccountStatus(status) {
+  return (status || 'ACTIVE').toUpperCase();
+}
+
+function renderAccountStatusLabel(status) {
+  switch (normalizeAccountStatus(status)) {
+    case 'BANNED':
+      return '已封禁';
+    case 'DELETED':
+      return '已删除';
+    default:
+      return '正常';
+  }
+}
+
+function canManageAdminUser(user) {
+  if (!user) return false;
+  if ((user.username || '') === auth.username) return false;
+  if ((user.role || '').toUpperCase() === 'ADMIN') return false;
+  return normalizeAccountStatus(user.accountStatus) !== 'DELETED';
+}
+
+async function refreshAdminUserManagement() {
+  await Promise.all([
+    loadAdminUsers(),
+    loadAdminOverview(),
+    loadAdminMerchants(adminFilters.merchantStatus)
+  ]);
+}
+
+async function refreshPaymentSideData() {
+  if (hasUserWalletUi.value) {
+    await Promise.all([loadWallet(), loadPaymentLogs()]);
+    return;
+  }
+  walletBalance.value = 0;
+  paymentLogs.value = [];
+  paymentLogsLoading.value = false;
+}
+
+function markPendingAlipayRedirect() {
+  sessionStorage.setItem(ALIPAY_PENDING_STORAGE_KEY, String(Date.now()));
+}
+
+function clearPendingAlipayRedirect() {
+  sessionStorage.removeItem(ALIPAY_PENDING_STORAGE_KEY);
+}
+
+function hasPendingAlipayRedirect() {
+  const startedAt = Number(sessionStorage.getItem(ALIPAY_PENDING_STORAGE_KEY) || 0);
+  return Number.isFinite(startedAt) && startedAt > 0 && (Date.now() - startedAt) < 30 * 60 * 1000;
+}
+
+function hasAlipayReturnParams() {
+  const params = new URLSearchParams(window.location.search || '');
+  return params.has('out_trade_no') && (params.has('trade_status') || params.has('sign'));
+}
+
+function readAlipayReturnParams() {
+  const params = new URLSearchParams(window.location.search || '');
+  return Object.fromEntries(params.entries());
+}
+
+function clearCurrentSearch() {
+  if (!window.location.search) return;
+  const nextUrl = `${window.location.pathname}${window.location.hash || ''}`;
+  window.history.replaceState({}, document.title, nextUrl);
+}
+
+async function handleAlipayReturnFromUrl() {
+  if (!hasAlipayReturnParams()) {
+    return false;
+  }
+
+  currentPage.value = 'orders';
+  localStorage.setItem('mk_page', 'orders');
+
+  const payload = readAlipayReturnParams();
+  const tradeStatus = normalizeOrderStatus(payload.trade_status);
+
+  try {
+    if (tradeStatus && !['TRADE_SUCCESS', 'TRADE_FINISHED'].includes(tradeStatus)) {
+      if (isLoggedIn.value) {
+        await Promise.all([loadMyOrders(), refreshPaymentSideData()]);
+      }
+      setNotice('info', '支付未完成，可在订单页继续支付。');
+      return true;
+    }
+
+    const result = await confirmAlipayReturn(payload);
+    if (isLoggedIn.value) {
+      await Promise.all([loadMyOrders(), refreshPaymentSideData()]);
+    }
+    if (result?.success) {
+      setNotice('success', '支付成功，订单状态已更新，已可申请售后或确认收货。');
+    } else {
+      setNotice('warning', '已返回站点，但支付结果未完成自动校验，请刷新订单列表确认。');
+    }
+  } catch (err) {
+    const msg = err?.response?.data?.message || '支付结果同步失败，请刷新订单列表后重试。';
+    if (isLoggedIn.value) {
+      await Promise.all([loadMyOrders(), refreshPaymentSideData()]);
+    }
+    setNotice('warning', msg);
+  } finally {
+    clearPendingAlipayRedirect();
+    clearCurrentSearch();
+  }
+
+  return true;
+}
+
+async function syncPendingAlipayState() {
+  const handledReturn = await handleAlipayReturnFromUrl();
+  if (handledReturn || !hasPendingAlipayRedirect() || !isLoggedIn.value) {
+    return;
+  }
+
+  try {
+    await Promise.all([loadMyOrders(), refreshPaymentSideData()]);
+  } finally {
+    clearPendingAlipayRedirect();
+  }
+}
+
+function handleWindowFocus() {
+  syncPendingAlipayState();
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    syncPendingAlipayState();
+  }
+}
+
+function normalizeOrderStatus(status) {
+  return (status || '').toUpperCase();
+}
+
+function isEscrowOrder(status) {
+  return ['PLACED', 'PENDING_ADMIN'].includes(normalizeOrderStatus(status));
+}
+
+function needsBuyerAction(status) {
+  return ['PENDING_PAYMENT', 'PLACED', 'PENDING_ADMIN'].includes(normalizeOrderStatus(status));
+}
+
+function needsMerchantAction(status) {
+  return normalizeOrderStatus(status) === 'REFUND_REQUESTED';
+}
+
+function getOrderStatusVariant(status) {
+  switch (normalizeOrderStatus(status)) {
+    case 'PENDING_PAYMENT':
+      return 'PENDING_PAYMENT';
+    case 'PLACED':
+    case 'PENDING_ADMIN':
+      return 'PLACED';
+    case 'APPROVED':
+      return 'APPROVED';
+    case 'REFUND_REQUESTED':
+      return 'REFUND_REQUESTED';
+    case 'REFUNDED':
+      return 'REFUNDED';
+    case 'REJECTED':
+      return 'REJECTED';
+    default:
+      return 'DEFAULT';
+  }
+}
+
+function formatPayMethodShort(payMethod) {
+  switch ((payMethod || '').toUpperCase()) {
+    case 'ALIPAY':
+      return '支付宝沙箱支付';
+    case 'WALLET':
+      return '历史钱包支付';
+    default:
+      return payMethod || '未知方式';
+  }
+}
+
+function countOrderItems(order) {
+  return (order?.items || []).reduce((sum, item) => sum + Number(item?.quantity || 0), 0);
+}
+
+function formatOrderItemPreview(order) {
+  const items = order?.items || [];
+  return items
+    .map((item) => `${item.productName || '商品'} ×${Number(item.quantity || 0)}${item.sizeLabel ? ` / ${item.sizeLabel}` : ''}`)
+    .join(' ');
+}
+
+function getOrderProgressMeta(status) {
+  switch (normalizeOrderStatus(status)) {
+    case 'PENDING_PAYMENT':
+      return {
+        percent: 24,
+        label: '等待支付完成',
+        desc: '订单已创建，支付成功后资金会先进入平台托管。'
+      };
+    case 'PLACED':
+    case 'PENDING_ADMIN':
+      return {
+        percent: 68,
+        label: '已支付，等待买家确认收货',
+        desc: '订单已支付，当前资金托管在平台；如需售后可直接发起退款申请。'
+      };
+    case 'APPROVED':
+      return {
+        percent: 100,
+        label: '订单已完成',
+        desc: '买家已确认收货，平台已完成抽佣并结算给商家。'
+      };
+    case 'REFUND_REQUESTED':
+      return {
+        percent: 78,
+        label: '退款申请待审核',
+        desc: '商家审核通过后，系统会按订单状态执行退款。'
+      };
+    case 'REFUNDED':
+      return {
+        percent: 100,
+        label: '订单已退款',
+        desc: '退款已完成，相关资金已按托管或结算状态回滚。'
+      };
+    case 'REJECTED':
+      return {
+        percent: 90,
+        label: '订单处理结束',
+        desc: '当前订单已被拒绝或恢复原状态，请以最新状态为准。'
+      };
+    default:
+      return {
+        percent: 40,
+        label: '订单处理中',
+        desc: '订单状态已更新，请按当前提示继续操作。'
+      };
+  }
+}
+
+function matchesMyOrderFilter(order, filterKey) {
+  const status = normalizeOrderStatus(order?.status);
+  switch (filterKey) {
+    case 'ALL':
+      return true;
+    case 'PENDING_ACTION':
+      return isBuyerOrderView.value ? needsBuyerAction(status) : needsMerchantAction(status);
+    case 'ESCROW':
+      return isEscrowOrder(status);
+    case 'REFUND':
+      return ['REFUND_REQUESTED', 'REFUNDED', 'REJECTED'].includes(status);
+    case 'DONE':
+      return status === 'APPROVED';
+    default:
+      return status === filterKey;
+  }
+}
+
+
 function formatOrderStatus(status) {
   switch ((status || '').toUpperCase()) {
     case 'PENDING_PAYMENT':
-      return '由支付宝托管';
+      return '待支付';
     case 'PLACED':
-      return '已下单（站内钱包）';
     case 'PENDING_ADMIN':
-      return '待管理员审批（站内钱包）';
+      return '已支付';
     case 'APPROVED':
-      return '已完成（站内钱包）';
+      return '已确认收货';
     case 'REFUND_REQUESTED':
-      return '退款待审核（站内钱包）';
+      return '退款待商家审核';
     case 'REJECTED':
-      return '已拒绝（站内钱包）';
+      return '已拒绝';
     case 'REFUNDED':
-      return '已退款（站内钱包）';
+      return '已退款';
     default:
-      return status ? `${status}（站内钱包）` : '-';
+      return status || '-';
   }
 }
 
@@ -838,11 +1287,11 @@ function formatOrderStatusWithPayMethod(status, payMethod) {
   const normalizedStatus = (status || '').toUpperCase();
   const normalizedPayMethod = (payMethod || '').toUpperCase();
   const payMethodLabel = normalizedPayMethod === 'ALIPAY'
-    ? '支付宝支付'
+    ? '支付宝沙箱支付'
     : normalizedPayMethod === 'WALLET'
-      ? '站内钱包支付'
+      ? '历史钱包支付'
       : normalizedStatus === 'PENDING_PAYMENT'
-        ? '支付宝支付'
+        ? '支付宝沙箱支付'
         : '未知支付方式';
   const suffix = `（${payMethodLabel}）`;
 
@@ -850,13 +1299,12 @@ function formatOrderStatusWithPayMethod(status, payMethod) {
     case 'PENDING_PAYMENT':
       return `待支付${suffix}`;
     case 'PLACED':
-      return `已下单${suffix}`;
     case 'PENDING_ADMIN':
-      return `待管理员审批${suffix}`;
+      return `已支付，待确认收货，资金托管中${suffix}`;
     case 'APPROVED':
-      return `已完成${suffix}`;
+      return `已确认收货，已结算${suffix}`;
     case 'REFUND_REQUESTED':
-      return `退款待审核${suffix}`;
+      return `退款待商家审核${suffix}`;
     case 'REJECTED':
       return `已拒绝${suffix}`;
     case 'REFUNDED':
@@ -867,30 +1315,101 @@ function formatOrderStatusWithPayMethod(status, payMethod) {
 }
 
 function canRefund(status) {
-  const s = (status || '').toUpperCase();
-  // 仅禁止已进入退款流程或已拒绝/已退款的单，其余允许弹窗申请
-  return !['REFUND_REQUESTED', 'REFUNDED', 'REJECTED'].includes(s);
+  return ['PENDING_ADMIN', 'PLACED', 'APPROVED'].includes((status || '').toUpperCase());
+}
+
+function hasMerchantReview(order) {
+  return Boolean(order?.merchantReviewed || Number(order?.merchantRating || 0) > 0 || String(order?.merchantReview || '').trim());
+}
+
+function canReviewMerchant(order) {
+  return isBuyerOrderView.value && normalizeOrderStatus(order?.status) === 'APPROVED' && !hasMerchantReview(order);
+}
+
+function renderMerchantRating(rating) {
+  const normalized = Math.max(0, Math.min(5, Number(rating || 0)));
+  return `${'★'.repeat(normalized)}${'☆'.repeat(5 - normalized)}`;
+}
+
+function renderAverageRating(rating) {
+  return Number(rating || 0).toFixed(1);
+}
+
+function renderAverageRatingStars(rating) {
+  return renderMerchantRating(Math.round(Number(rating || 0)));
+}
+
+function resolveStoreName(product) {
+  return product?.owner?.merchantStoreName || product?.owner?.username || '店铺';
+}
+
+function canReviewRefund(status) {
+  return (status || '').toUpperCase() === 'REFUND_REQUESTED';
+}
+
+function canOpenRefundChat(order) {
+  if (!order) return false;
+  const status = normalizeOrderStatus(order.status);
+  return status === 'REFUND_REQUESTED' || status === 'REFUNDED' || Number(order.refundChatCount || 0) > 0;
+}
+
+function getRefundChatLabel(order) {
+  const count = Number(order?.refundChatCount || 0);
+  return count > 0 ? `售后沟通 (${count})` : '售后沟通';
+}
+
+function canConfirmReceipt(status) {
+  return ['PLACED', 'PENDING_ADMIN'].includes((status || '').toUpperCase());
 }
 
 function submitAlipayForm(payResp) {
-  if (!payResp || !payResp.gateway || !payResp.params) {
-    alert('未获取到支付参数');
-    return;
+  if (!payResp || ((!payResp.gateway || !payResp.params) && !payResp.redirectUrl)) {
+    setNotice('error', '未获取到支付参数');
+    openActionDialog({
+      title: '支付参数缺失',
+      message: '订单已创建，但暂时没有拿到支付宝支付参数。你可以稍后到订单页继续支付。',
+      confirmText: '知道了',
+      showCancel: false,
+      variant: 'error'
+    });
+    return false;
   }
-  const form = document.createElement('form');
-  form.method = 'POST';
-  const gateway = payResp.gateway.includes('?') ? payResp.gateway : `${payResp.gateway}?_input_charset=utf-8`;
-  form.action = gateway;
-  Object.entries(payResp.params).forEach(([k, v]) => {
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = k;
-    input.value = v;
-    form.appendChild(input);
-  });
-  document.body.appendChild(form);
-  form.submit();
-  document.body.removeChild(form);
+
+  if (payResp?.gateway && payResp?.params) {
+    markPendingAlipayRedirect();
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.acceptCharset = 'UTF-8';
+    form.enctype = 'application/x-www-form-urlencoded';
+    form.target = '_self';
+    form.style.display = 'none';
+    form.action = payResp.gateway;
+    Object.entries(payResp.params).forEach(([k, v]) => {
+      if (v == null) return;
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = k;
+      input.value = String(v);
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+    window.setTimeout(() => {
+      if (form.parentNode) {
+        form.parentNode.removeChild(form);
+      }
+    }, 1000);
+    return true;
+  }
+
+  const redirectUrl = typeof payResp?.redirectUrl === 'string' ? payResp.redirectUrl.trim() : '';
+  if (redirectUrl) {
+    markPendingAlipayRedirect();
+    window.location.assign(redirectUrl);
+    return true;
+  }
+
+  return false;
 }
 
 function formatDateTime(value) {
@@ -900,14 +1419,19 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
+
 function formatPaymentType(type) {
   switch ((type || '').toUpperCase()) {
     case 'PAY':
       return '支付';
+    case 'BATCH':
+      return '支付批次';
     case 'INCOME':
       return '收入';
     case 'REFUND':
       return '退款';
+    case 'ESCROW':
+      return '托管';
     case 'RECHARGE':
       return '充值';
     case 'ADJUST':
@@ -921,6 +1445,11 @@ function selectCategory(categoryId) {
   activeCategory.value = categoryId ?? 'all';
   productPage.value = 1;
   loadProducts(categoryId === 'all' ? null : categoryId);
+}
+
+function selectStore(storeId) {
+  selectedStoreId.value = storeId || 'all';
+  productPage.value = 1;
 }
 
 function addToCart(product, explicitSize) {
@@ -938,7 +1467,7 @@ function addToCart(product, explicitSize) {
   }
   const availableStock = sizeList.length ? sizeStockOf(product, sizeLabel) : Number(product.stock || 0);
   if (availableStock <= 0) {
-    setNotice('warning', sizeList.length ? '该尺码暂无库存' : '库存不足');
+    setNotice('warning', sizeList.length ? '该尺码暂时无库存' : '库存不足');
     return;
   }
   const key = `${product.id}__${sizeLabel || '默认'}`;
@@ -984,7 +1513,7 @@ function addProductFromAi(productId) {
   }
   const defaultSize = (product.sizesDetail || []).find((s) => Number(s.stock || 0) > 0)?.label;
   addToCart(product, defaultSize);
-  showAiToast(`已加入购物车：${product.name}`, 'success');
+  showToast(`已加入购物车：${product.name}`, 'success');
 }
 
 function findProductsInContent(content) {
@@ -1003,29 +1532,21 @@ function findProductsInContent(content) {
     .filter(Boolean);
 }
 
-const aiSuggestions = computed(() => {
-  const msgs = [...aiMessages.value].reverse();
-  const lastAssistant = msgs.find((m) => m.role === 'assistant');
-  if (!lastAssistant) return [];
-  return findProductsInContent(lastAssistant.content);
-});
-
-function showAiToast(message, type = 'info') {
-  aiToast.message = message;
-  aiToast.type = type;
-  aiToast.visible = true;
+function showToast(message, type = 'info') {
+  toastState.message = message;
+  toastState.type = type;
+  toastState.visible = true;
   setTimeout(() => {
-    aiToast.visible = false;
+    toastState.visible = false;
   }, 2000);
 }
 
 async function openProductDetail(product) {
   detailProduct.value = product;
   detailComments.value = [];
-  detailIntro.value = '';
   detailLoading.value = true;
-  detailShowAi.value = !product.videoUrl;
-   if (product?.sizesDetail?.length) {
+  detailCommentInput.value = '';
+  if (product?.sizesDetail?.length) {
     const first = product.sizesDetail.find((s) => Number(s.stock || 0) > 0) || product.sizesDetail[0];
     if (!selectedSizes[product.id]) {
       selectedSizes[product.id] = first?.label || '';
@@ -1035,42 +1556,48 @@ async function openProductDetail(product) {
     await loadProducts();
   }
   try {
-    detailComments.value = await fetchComments(product.id);
+    const [productDetail, comments] = await Promise.all([
+      fetchProductDetail(product.id).catch(() => product),
+      fetchComments(product.id).catch(() => [])
+    ]);
+    detailProduct.value = productDetail || product;
+    detailComments.value = comments || [];
   } catch (e) {
     // ignore
+  } finally {
+    detailLoading.value = false;
   }
-  if (!product.videoUrl) {
-    detailAiLoading.value = true;
-    try {
-      const res = await fetchProductIntro(product.id);
-      detailIntro.value = res.result || '';
-    } catch (e) {
-      detailIntro.value = 'AI 介绍暂不可用';
-    } finally {
-      detailAiLoading.value = false;
-    }
-  }
-  detailLoading.value = false;
 }
 
 function closeProductDetail() {
   detailProduct.value = null;
   detailComments.value = [];
-  detailIntro.value = '';
-  detailShowAi.value = false;
+  detailCommentInput.value = '';
 }
 
-async function refreshAiIntro() {
-  if (!detailProduct.value) return;
-  detailAiLoading.value = true;
-  try {
-    const res = await fetchProductIntro(detailProduct.value.id);
-    detailIntro.value = res.result || '';
-  } catch (e) {
-    detailIntro.value = 'AI 介绍暂不可用';
-  } finally {
-    detailAiLoading.value = false;
+function normalizePage(page) {
+  if (!isLoggedIn.value) {
+    return 'catalog';
   }
+  if (isAdmin.value) {
+    if (!supportedPages.has(page) || !String(page).startsWith('admin')) {
+      return 'adminOverview';
+    }
+    return page;
+  }
+  if (!supportedPages.has(page)) {
+    return auth.role === 'MERCHANT' && isMerchantPendingReview.value ? 'profile' : 'catalog';
+  }
+  if (String(page).startsWith('admin')) {
+    return 'catalog';
+  }
+  if (auth.role === 'MERCHANT' && isMerchantPendingReview.value && page !== 'profile') {
+    return 'profile';
+  }
+  if (auth.role === 'USER' && page === 'walletUser') {
+    return 'orders';
+  }
+  return page;
 }
 
 async function addProductComment() {
@@ -1107,12 +1634,18 @@ async function checkout() {
   }
   if (!payModalAddressId.value) {
     setNotice('warning', '请先选择收货地址');
-    alert('请在地址簿中选择地址后再下单');
+    await openActionDialog({
+      title: '还没选择收货地址',
+      message: '请先在地址列表中选择一个收货地址，再继续提交订单。',
+      confirmText: '知道了',
+      showCancel: false,
+      variant: 'warning'
+    });
     return;
   }
   const addr = addressList.value.find((a) => a.id === payModalAddressId.value);
   if (!addr) {
-    setNotice('warning', '所选地址无效，请刷新');
+    setNotice('warning', '所选地址无效，请刷新后重试');
     return;
   }
   selectedAddressId.value = addr.id;
@@ -1128,12 +1661,20 @@ async function checkout() {
   }
   const cnMobile = /^1[3-9]\d{9}$/;
   if (!cnMobile.test(phone)) {
-    setNotice('warning', '请输入有效的大陆手机号（11位数字，以1开头）');
-    alert('请输入有效的大陆手机号（11位数字，以1开头）');
+    setNotice('warning', '请输入有效的中国大陆手机号');
+    await openActionDialog({
+      title: '手机号格式不正确',
+      message: '请填写 11 位中国大陆手机号，例如 13800138000。',
+      confirmText: '重新填写',
+      showCancel: false,
+      variant: 'warning'
+    });
     return;
   }
 
   submitting.value = true;
+  let createdOrders = [];
+  let paymentStarted = false;
   try {
     if (!addressList.value.length) {
       await loadAddresses();
@@ -1153,22 +1694,50 @@ async function checkout() {
         sizeLabel: item.sizeLabel || ''
       }))
     };
-    const res = await submitOrder(payload);
-    if (payModalPayMethod.value === 'ALIPAY') {
-      setNotice('success', `订单已创建，正在跳转支付宝支付`);
-      const payResp = await createAlipayPayUrl(res.orderId || res.id);
-      submitAlipayForm(payResp);
-    } else {
-      setNotice('success', `钱包支付成功，订单号 ${res.orderNumber}`);
+    const res = await submitOrderBatch(payload);
+    createdOrders = res?.orders || [];
+    if (!createdOrders.length) {
+      throw new Error('未创建任何订单');
     }
     cart.value = [];
-    await Promise.all([loadMyOrders(), loadWallet(), loadPaymentLogs()]);
+    await Promise.all([loadMyOrders(), refreshPaymentSideData()]);
+    setNotice('success', `已创建 ${createdOrders.length} 笔订单，正在跳转支付宝沙箱支付`);
+    const payResp = await createAlipayPayUrl({
+      orderIds: createdOrders.map((order) => order.orderId || order.id)
+    });
+    paymentStarted = submitAlipayForm(payResp);
   } catch (err) {
-    const msg = err?.response?.data?.message || '下单失败，请稍后重试';
+    const fallback = createdOrders.length
+      ? '订单已创建，可在订单页继续支付'
+      : '下单失败，请稍后重试';
+    const msg = err?.response?.data?.message || err?.message || fallback;
     setNotice('error', msg);
   } finally {
     submitting.value = false;
-    showPayModal.value = false;
+    if (!paymentStarted) {
+      showPayModal.value = false;
+    }
+  }
+}
+
+function canPayPending(order) {
+  return isBuyerOrderView.value
+    && (order?.status || '').toUpperCase() === 'PENDING_PAYMENT'
+    && (order?.payMethod || '').toUpperCase() === 'ALIPAY';
+}
+
+async function payPendingOrder(order) {
+  const orderId = order?.orderId || order?.id;
+  if (!orderId || repayOrderId.value) return;
+  repayOrderId.value = orderId;
+  try {
+    const payResp = await createAlipayPayUrl(orderId);
+    submitAlipayForm(payResp);
+  } catch (err) {
+    const msg = err?.response?.data?.message || '拉起支付失败';
+    setNotice('error', msg);
+  } finally {
+    repayOrderId.value = null;
   }
 }
 
@@ -1273,6 +1842,79 @@ async function changePassword() {
   }
 }
 
+function resetMerchantProfile() {
+  merchantProfile.storeName = '';
+  merchantProfile.contactName = '';
+  merchantProfile.contactPhone = '';
+  merchantProfile.businessAddress = '';
+  merchantProfile.licenseNumber = '';
+  merchantProfile.description = '';
+}
+
+function applyMerchantProfile(data) {
+  merchantProfile.storeName = data?.storeName || '';
+  merchantProfile.contactName = data?.contactName || '';
+  merchantProfile.contactPhone = data?.contactPhone || '';
+  merchantProfile.businessAddress = data?.businessAddress || '';
+  merchantProfile.licenseNumber = data?.licenseNumber || '';
+  merchantProfile.description = data?.description || '';
+  if (data?.merchantStatus) {
+    auth.merchantStatus = data.merchantStatus;
+    localStorage.setItem('mk_merchant_status', auth.merchantStatus);
+  }
+}
+
+async function loadMerchantProfile() {
+  if (!isLoggedIn.value || auth.role !== 'MERCHANT') return;
+  merchantProfileLoading.value = true;
+  try {
+    const data = await getMerchantProfile();
+    applyMerchantProfile(data);
+  } catch (err) {
+    const msg = err?.response?.data?.message || '无法加载商家资料';
+    setNotice('error', msg);
+  } finally {
+    merchantProfileLoading.value = false;
+  }
+}
+
+async function submitMerchantProfile(submitForReview = false) {
+  if (merchantProfileSubmitting.value || auth.role !== 'MERCHANT') return;
+  if (
+    submitForReview
+    && (!merchantProfile.storeName.trim()
+      || !merchantProfile.contactName.trim()
+      || !merchantProfile.contactPhone.trim()
+      || !merchantProfile.businessAddress.trim()
+      || !merchantProfile.licenseNumber.trim())
+  ) {
+    setNotice('warning', '请先填写完整的商家基本信息再提交审核');
+    return;
+  }
+  merchantProfileSubmitting.value = true;
+  try {
+    const data = await saveMerchantProfile({
+      storeName: merchantProfile.storeName,
+      contactName: merchantProfile.contactName,
+      contactPhone: merchantProfile.contactPhone,
+      businessAddress: merchantProfile.businessAddress,
+      licenseNumber: merchantProfile.licenseNumber,
+      description: merchantProfile.description,
+      submitForReview
+    });
+    applyMerchantProfile(data);
+    const nextPage = normalizePage(currentPage.value);
+    currentPage.value = nextPage;
+    localStorage.setItem('mk_page', nextPage);
+    setNotice('success', submitForReview ? '资料已提交，等待管理员审核' : '商家资料已保存');
+  } catch (err) {
+    const msg = err?.response?.data?.message || (submitForReview ? '提交审核失败' : '保存资料失败');
+    setNotice('error', msg);
+  } finally {
+    merchantProfileSubmitting.value = false;
+  }
+}
+
 async function loadAddresses() {
   if (!isLoggedIn.value) return;
   try {
@@ -1301,6 +1943,38 @@ function setNotice(type, message) {
   }, 2600);
 }
 
+function closeActionDialog(result = false) {
+  actionDialog.visible = false;
+  if (actionDialogResolver) {
+    actionDialogResolver(result);
+    actionDialogResolver = null;
+  }
+}
+
+function openActionDialog({
+  title,
+  message,
+  confirmText = '确定',
+  cancelText = '取消',
+  showCancel = true,
+  variant = 'info'
+}) {
+  if (actionDialogResolver) {
+    actionDialogResolver(false);
+    actionDialogResolver = null;
+  }
+  actionDialog.title = title || '提示';
+  actionDialog.message = message || '';
+  actionDialog.confirmText = confirmText;
+  actionDialog.cancelText = cancelText;
+  actionDialog.showCancel = showCancel;
+  actionDialog.variant = variant;
+  actionDialog.visible = true;
+  return new Promise((resolve) => {
+    actionDialogResolver = resolve;
+  });
+}
+
 async function loadLoginCaptcha() {
   loginCaptcha.loading = true;
   try {
@@ -1311,7 +1985,7 @@ async function loadLoginCaptcha() {
   } catch (err) {
     loginCaptcha.token = '';
     loginCaptcha.imageData = '';
-    loginNotice.value = '验证码加载失败，请点击换一张重试';
+    loginNotice.value = '验证码加载失败，请点击刷新后重试';
   } finally {
     loginCaptcha.loading = false;
   }
@@ -1347,9 +2021,21 @@ async function openPayModal() {
   }
   if (!addressList.value.length) {
     setNotice('warning', '请先添加收货地址');
+    const shouldGoProfile = await openActionDialog({
+      title: '还没有收货地址',
+      message: '先到个人中心添加收货地址，再继续下单。',
+      confirmText: '去添加',
+      cancelText: '稍后',
+      variant: 'warning'
+    });
+    if (shouldGoProfile) {
+      go('profile');
+    }
     return;
   }
-  const targetId = selectedAddressId.value || addressList.value[0]?.id;
+  const targetId = selectedAddressId.value
+    || addressList.value.find((addr) => addr.default)?.id
+    || addressList.value[0]?.id;
   payModalAddressId.value = targetId;
   payModalPayMethod.value = 'ALIPAY';
   if (targetId) {
@@ -1440,14 +2126,18 @@ async function handleLogin() {
     localStorage.setItem('mk_username', res.username);
     localStorage.setItem('mk_role', res.role);
     localStorage.setItem('mk_merchant_status', auth.merchantStatus);
-    setNotice('success', `欢迎回来，${res.username}`);
+    setNotice('success', '欢迎回来，' + res.username);
     loginNotice.value = '';
     closeLoginModal();
     if (auth.role === 'MERCHANT') {
-      await loadMyProducts();
+      await loadMerchantProfile();
+      if (isMerchantApproved.value) {
+        await loadMyProducts();
+      }
     }
-    await loadWallet();
-    await loadPaymentLogs();
+    currentPage.value = normalizePage(auth.role === 'MERCHANT' ? 'profile' : currentPage.value);
+    localStorage.setItem('mk_page', currentPage.value);
+    await refreshPaymentSideData();
   } catch (err) {
     const msg = err?.response?.data?.message || '登录失败';
     loginNotice.value = msg;
@@ -1465,7 +2155,7 @@ async function handleLogout() {
   auth.username = '';
   auth.role = '';
   auth.merchantStatus = '';
-  subscriptionUntil.value = null;
+  resetMerchantProfile();
   myProducts.value = [];
   myProductPage.value = 1;
   // 清空管理端数据缓存
@@ -1481,6 +2171,7 @@ async function handleLogout() {
   });
   adminMerchants.value = [];
   adminOrders.value = [];
+  adminUsers.value = [];
   adminFilters.merchantStatus = 'PENDING';
   localStorage.removeItem('mk_token');
   localStorage.removeItem('mk_username');
@@ -1579,7 +2270,7 @@ function onVideoChange(event) {
   const file = event.target.files?.[0];
   if (file) {
     productFormVideoFile.value = file;
-    showAiToast('已选择视频文件', 'info');
+    showToast('已选择视频文件', 'info');
   }
 }
 
@@ -1602,15 +2293,16 @@ async function handleRegister() {
     localStorage.setItem('mk_username', res.username);
     localStorage.setItem('mk_role', res.role);
     localStorage.setItem('mk_merchant_status', auth.merchantStatus);
-    setNotice('success', registerForm.role === 'MERCHANT' ? '注册成功，待审核后可上架' : '注册成功');
+    setNotice('success', registerForm.role === 'MERCHANT' ? '注册成功，请先完善商家资料并提交审核' : '注册成功');
     registerNotice.value = '';
     closeRegisterModal();
     closeLoginModal();
     if (auth.role === 'MERCHANT') {
-      await loadMyProducts();
+      await loadMerchantProfile();
     }
-    await loadWallet();
-    await loadPaymentLogs();
+    currentPage.value = normalizePage(auth.role === 'MERCHANT' ? 'profile' : currentPage.value);
+    localStorage.setItem('mk_page', currentPage.value);
+    await refreshPaymentSideData();
   } catch (err) {
     const msg = err?.response?.data?.message || '注册失败';
     registerNotice.value = msg;
@@ -1646,16 +2338,17 @@ async function handleRegisterWithEmail() {
     localStorage.setItem('mk_username', res.username);
     localStorage.setItem('mk_role', res.role);
     localStorage.setItem('mk_merchant_status', auth.merchantStatus);
-    setNotice('success', registerForm.role === 'MERCHANT' ? '注册成功，待审核后可上架' : '注册成功');
+    setNotice('success', registerForm.role === 'MERCHANT' ? '注册成功，请先完善商家资料并提交审核' : '注册成功');
     registerNotice.value = '';
     registerForm.emailCode = '';
     closeRegisterModal();
     closeLoginModal();
     if (auth.role === 'MERCHANT') {
-      await loadMyProducts();
+      await loadMerchantProfile();
     }
-    await loadWallet();
-    await loadPaymentLogs();
+    currentPage.value = normalizePage(auth.role === 'MERCHANT' ? 'profile' : currentPage.value);
+    localStorage.setItem('mk_page', currentPage.value);
+    await refreshPaymentSideData();
   } catch (err) {
     const msg = err?.response?.data?.message || '注册失败';
     registerNotice.value = msg;
@@ -1668,37 +2361,21 @@ function go(page) {
     currentPage.value = 'catalog';
     return;
   }
+  page = normalizePage(page);
   currentPage.value = page;
   localStorage.setItem('mk_page', page);
   if (isAdmin.value) {
     if (page === 'adminMerchants' && !adminMerchants.value.length) {
       loadAdminMerchants(adminFilters.merchantStatus);
     }
+    if (page === 'adminUsers' && !adminUsers.value.length) {
+      loadAdminUsers();
+    }
     if (page === 'adminOrders' && !adminOrders.value.length) {
       loadAdminOrders();
     }
-    if (page === 'adminStock' && !lowStock.value.length) {
-      loadLowStock();
-    }
-    if (page === 'adminApproval') {
-      loadApprovalSettings();
-      loadPendingOrders();
-    }
-    if (page === 'adminWallet') {
-      loadAdminWallets();
-    }
-    if (page === 'adminLogs') {
-      loadLoginLogs();
-      loadSystemLogs();
-    }
     if (page === 'adminRevenue') {
       loadAdminRevenue();
-    }
-    if (page === 'adminTerminal') {
-      terminalOutput.value = '';
-      terminalCommand.value = '';
-      terminalPassword.value = '';
-      terminalSignature.value = '';
     }
   } else if (auth.role === 'MERCHANT' && page === 'merchantUpload') {
     editingProductId.value = null;
@@ -1718,24 +2395,27 @@ function go(page) {
       loadMyProducts();
     }
     loadWallet();
+  } else if (auth.role === 'MERCHANT' && page === 'merchantStock') {
+    loadLowStock();
   } else if (page === 'chat') {
     loadRecentChats();
   } else if (page === 'orders') {
     loadMyOrders();
   } else if (page === 'walletUser') {
-    loadWallet();
-    loadMyOrders();
-    loadPaymentLogs();
-  } else if (page === 'profile') {
-    loadAddresses();
-  } else if (page === 'ai') {
-    aiResult.value = '';
-    aiError.value = '';
-    if (!products.value.length) {
-      loadProducts();
+    if (hasUserWalletUi.value) {
+      loadWallet();
     }
-  } else if (page === 'adminAi') {
-    loadAiKey();
+    loadPaymentLogs();
+  } else if (page === 'checkout') {
+    if (isLoggedIn.value) {
+      loadAddresses();
+    }
+  } else if (page === 'profile') {
+    if (auth.role === 'MERCHANT') {
+      loadMerchantProfile();
+    } else {
+      loadAddresses();
+    }
   }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1761,6 +2441,10 @@ function changeOrderPage(delta) {
   updatePage(orderPage, orderTotalPages, delta);
 }
 
+function changeMyOrderPage(delta) {
+  updatePage(myOrderPage, myOrderTotalPages, delta);
+}
+
 function changeLowStockPage(delta) {
   updatePage(lowStockPage, lowStockTotalPages, delta);
 }
@@ -1772,29 +2456,6 @@ function updatePage(stateRef, totalRef, delta) {
     stateRef.value = next;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-}
-
-function toggleSelectAllMerchants(checked) {
-  const ids = pagedMerchants.value.map((m) => m.id);
-  if (checked) {
-    selectedMerchants.value = Array.from(new Set([...selectedMerchants.value, ...ids]));
-  } else {
-    selectedMerchants.value = selectedMerchants.value.filter((id) => !ids.includes(id));
-  }
-}
-
-function toggleMerchant(id, checked) {
-  if (checked) {
-    if (!selectedMerchants.value.includes(id)) {
-      selectedMerchants.value = [...selectedMerchants.value, id];
-    }
-  } else {
-    selectedMerchants.value = selectedMerchants.value.filter((x) => x !== id);
-  }
-}
-
-function clearMerchantSelection() {
-  selectedMerchants.value = [];
 }
 
 function onFileChange(event) {
@@ -1859,7 +2520,13 @@ function startEdit(product) {
 
 async function handleDeleteProduct(id) {
   if (!id) return;
-  const ok = confirm('确认删除该商品吗？');
+  const ok = await openActionDialog({
+    title: '删除商品',
+    message: '删除后商品会从店铺列表中移除，确定继续吗？',
+    confirmText: '删除',
+    cancelText: '取消',
+    variant: 'error'
+  });
   if (!ok) return;
   try {
     await deleteProduct(id);
@@ -1896,20 +2563,55 @@ async function openChat(product) {
     setNotice('error', '该商品没有指定商家');
     return;
   }
+  currentChat.mode = 'product';
   currentChat.productId = product.id;
+  currentChat.orderId = null;
   currentChat.targetId = product.owner.id;
-  currentChat.productName = product.name;
+  currentChat.title = product.name;
   currentChat.targetName = product.owner.username || '商家';
+  currentChat.subtitle = `与 ${currentChat.targetName} 沟通`;
+  currentChat.messages = [];
+  currentChat.content = '';
   showChatPanel.value = true;
   await loadChatMessages();
 }
 
 async function openChatFromRecent(msg) {
   const other = msg.sender?.username === auth.username ? msg.receiver : msg.sender;
+  currentChat.mode = 'product';
   currentChat.productId = msg.product?.id;
-  currentChat.productName = msg.product?.name || '商品';
+  currentChat.orderId = null;
+  currentChat.title = msg.product?.name || '商品';
   currentChat.targetId = other?.id;
   currentChat.targetName = other?.username || '用户';
+  currentChat.subtitle = `与 ${currentChat.targetName} 沟通`;
+  currentChat.messages = [];
+  currentChat.content = '';
+  showChatPanel.value = true;
+  await loadChatMessages();
+}
+
+async function openRefundChat(order) {
+  if (!isLoggedIn.value) {
+    setNotice('warning', '请先登录');
+    return;
+  }
+  const orderId = order?.orderId || order?.id;
+  if (!orderId) {
+    setNotice('error', '订单信息缺失');
+    return;
+  }
+  currentChat.mode = 'refund';
+  currentChat.orderId = orderId;
+  currentChat.productId = null;
+  currentChat.targetId = null;
+  currentChat.targetName = auth.role === 'MERCHANT'
+    ? (order?.buyerName || '买家')
+    : (order?.merchantName || '商家');
+  currentChat.title = `售后单 ${order?.orderNumber || `#${orderId}`}`;
+  currentChat.subtitle = `与 ${currentChat.targetName} 沟通退款事宜`;
+  currentChat.messages = [];
+  currentChat.content = '';
   showChatPanel.value = true;
   await loadChatMessages();
 }
@@ -1924,8 +2626,13 @@ async function loadRecentChats() {
 }
 
 async function loadChatMessages() {
-  if (!currentChat.productId || !currentChat.targetId) return;
   try {
+    if (currentChat.mode === 'refund') {
+      if (!currentChat.orderId) return;
+      currentChat.messages = await fetchRefundChat(currentChat.orderId);
+      return;
+    }
+    if (!currentChat.productId || !currentChat.targetId) return;
     currentChat.messages = await fetchChat(currentChat.productId, currentChat.targetId);
   } catch (err) {
     // ignore
@@ -1935,13 +2642,20 @@ async function loadChatMessages() {
 async function sendChatMessage() {
   if (!currentChat.content.trim()) return;
   try {
-    await sendChat({
-      productId: currentChat.productId,
-      targetId: currentChat.targetId,
-      content: currentChat.content
-    });
+    if (currentChat.mode === 'refund') {
+      await sendRefundChat(currentChat.orderId, currentChat.content.trim());
+    } else {
+      await sendChat({
+        productId: currentChat.productId,
+        targetId: currentChat.targetId,
+        content: currentChat.content
+      });
+    }
     currentChat.content = '';
     await loadChatMessages();
+    if (currentChat.mode === 'refund') {
+      await loadMyOrders();
+    }
   } catch (err) {
     const msg = err?.response?.data?.message || '发送失败';
     setNotice('error', msg);
@@ -1970,28 +2684,8 @@ async function savePwdModal() {
   }
 }
 
-async function runTerminalCommand() {
-  if (!terminalCommand.value || !terminalPassword.value) {
-    setNotice('warning', '请输入命令和密码');
-    return;
-  }
-  try {
-    const sig = await hmacHex(TERMINAL_SECRET, terminalPassword.value);
-    terminalSignature.value = sig;
-    const res = await runTerminal(terminalCommand.value, terminalPassword.value, sig);
-    const header = `$ ${terminalCommand.value}\n退出码: ${res.exitCode}`;
-    terminalOutput.value = `${terminalOutput.value}\n${header}\n${res.output || ''}`.trim();
-    terminalCommand.value = '';
-  } catch (err) {
-    const msg = err?.response?.data?.message || '执行失败';
-    setNotice('error', msg);
-    terminalOutput.value = `${terminalOutput.value}\n错误: ${msg}`.trim();
-  }
-}
-
 function openRefundModal(order) {
   if (!order) return;
-  console.log('openRefundModal', order);
   refundModal.orderId = order.orderId || order.id;
   refundModal.reason = '';
   showRefundModal.value = true;
@@ -2005,9 +2699,36 @@ function closeRefundModal() {
   refundError.value = '';
 }
 
+function openReviewModal(order) {
+  if (!order || !canReviewMerchant(order)) return;
+  reviewModal.orderId = order.orderId || order.id;
+  reviewModal.orderNumber = order.orderNumber || '';
+  reviewModal.merchantName = order.merchantName || '';
+  reviewModal.rating = 5;
+  reviewModal.content = '';
+  reviewError.value = '';
+  showReviewModal.value = true;
+}
+
+function closeReviewModal() {
+  reviewModal.orderId = null;
+  reviewModal.orderNumber = '';
+  reviewModal.merchantName = '';
+  reviewModal.rating = 5;
+  reviewModal.content = '';
+  reviewError.value = '';
+  showReviewModal.value = false;
+}
+
 function fillAddressFromGeo(target = 'order') {
   if (!navigator.geolocation) {
-    alert('当前浏览器不支持定位，请手动填写地址');
+    openActionDialog({
+      title: '当前浏览器不支持定位',
+      message: '请手动填写地址，或使用地图选点功能。',
+      confirmText: '知道了',
+      showCancel: false,
+      variant: 'warning'
+    });
     return;
   }
   useGeoLoading.value = true;
@@ -2025,7 +2746,13 @@ function fillAddressFromGeo(target = 'order') {
       useGeoLoading.value = false;
     },
     (err) => {
-      alert('定位失败，请检查权限并手动填写地址');
+      openActionDialog({
+        title: '定位失败',
+        message: '请检查浏览器定位权限，或改用地图选点 / 手动填写地址。',
+        confirmText: '知道了',
+        showCancel: false,
+        variant: 'warning'
+      });
       useGeoLoading.value = false;
     },
     { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
@@ -2125,7 +2852,7 @@ async function handleMapClick(e) {
   const lat = e.lnglat.getLat();
   mapSelectedPoint.value = { lng, lat };
   setMapMarker(lng, lat);
-  mapSelectedAddress.value = '解析地址中...';
+  mapSelectedAddress.value = '正在解析地址...';
   const resolved = await resolveAddress(lat, lng);
   mapSelectedAddress.value = resolved || `当前位置（约）: ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 }
@@ -2144,7 +2871,13 @@ async function openMapPicker(target = 'order') {
 
 function applyMapLocation() {
   if (!mapSelectedPoint.value) {
-    alert('请在地图上点击选择位置');
+    openActionDialog({
+      title: '还没有选点',
+      message: '请先在地图上点击一个位置，再填入地址。',
+      confirmText: '知道了',
+      showCancel: false,
+      variant: 'warning'
+    });
     return;
   }
   const { lat, lng } = mapSelectedPoint.value;
@@ -2158,160 +2891,126 @@ function applyMapLocation() {
   setNotice('success', '已填入地图位置，可补充详细地址');
 }
 
+async function confirmReceipt(order) {
+  const orderId = order?.orderId || order?.id;
+  if (!orderId || receiptSubmitting.value) return;
+  const ok = await openActionDialog({
+    title: '确认收货',
+    message: `确认订单 ${order.orderNumber} 已收货吗？确认后平台会将托管金额结算给商家，并扣除 5% 佣金。`,
+    confirmText: '确认收货',
+    cancelText: '再等等',
+    variant: 'warning'
+  });
+  if (!ok) {
+    return;
+  }
+
+  receiptSubmitting.value = true;
+  try {
+    await confirmReceiptOrder(orderId);
+    await Promise.all([loadMyOrders(), refreshPaymentSideData()]);
+    const confirmedOrder = myOrders.value.find((item) => (item.orderId || item.id) === orderId);
+    setNotice('success', '已确认收货，订单已结算，现在可以评价商家');
+    if (confirmedOrder && canReviewMerchant(confirmedOrder)) {
+      openReviewModal(confirmedOrder);
+    }
+  } catch (err) {
+    const msg = err?.response?.data?.message || '确认收货失败';
+    setNotice('error', msg);
+  } finally {
+    receiptSubmitting.value = false;
+  }
+}
+
+
 async function submitRefund() {
-  console.log('submitRefund click', refundModal.orderId, refundModal.reason);
   if (!refundModal.orderId) {
-    alert('订单信息缺失，无法提交退款');
+    await openActionDialog({
+      title: '无法提交退款',
+      message: '订单信息缺失，请刷新订单列表后重试。',
+      confirmText: '知道了',
+      showCancel: false,
+      variant: 'error'
+    });
     return;
   }
   if (refundSubmitting.value) return;
+  const submittedOrderId = refundModal.orderId;
   refundSubmitting.value = true;
   try {
     setNotice('info', '正在提交退款申请...');
-    await refundOrder(refundModal.orderId, refundModal.reason ? { reason: refundModal.reason } : {});
-    setNotice('success', '已提交退款申请');
-    alert('退款申请已提交');
+    await refundOrder(submittedOrderId, refundModal.reason ? { reason: refundModal.reason } : {});
+    setNotice('success', '退款申请已提交，待商家审核');
     closeRefundModal();
-    await Promise.all([loadMyOrders(), loadWallet(), loadPaymentLogs()]);
+    await loadMyOrders();
+    const submittedOrder = myOrders.value.find((order) => (order.orderId || order.id) === submittedOrderId);
+    await openActionDialog({
+      title: '退款申请已提交',
+      message: '商家审核通过后，系统会按当前订单状态执行退款。你也可以继续在售后沟通中和商家确认退款细节。',
+      confirmText: '知道了',
+      showCancel: false,
+      variant: 'success'
+    });
+    if (submittedOrder) {
+      await openRefundChat(submittedOrder);
+    }
   } catch (err) {
     const msg = err?.response?.data?.message || '退款失败';
     setNotice('error', msg);
-    alert(msg);
     refundError.value = msg;
   } finally {
     refundSubmitting.value = false;
   }
 }
 
-async function loadAiKey() {
-  if (!isAdmin.value) return;
-  try {
-    const res = await getAiKey();
-    aiKey.value = res.aiApiKey || '';
-    mapApiKey.value = res.mapApiKey || '';
-    mapJsKey.value = res.mapJsKey || '';
-    mapJsSec.value = res.mapJsSec || '';
-    alipayAppId.value = res.alipayAppId || '';
-    alipayPrivateKey.value = res.alipayPrivateKey || '';
-    alipayPublicKey.value = res.alipayPublicKey || '';
-    alipayGateway.value = res.alipayGateway || alipayGateway.value;
-    alipayReturnUrl.value = res.alipayReturnUrl || '';
-    alipayNotifyUrl.value = res.alipayNotifyUrl || '';
-  } catch (e) {
-    // ignore
-  }
-}
-
-async function saveAiKeyValue() {
-  if (!isAdmin.value) return;
-  try {
-    await saveAiKey({
-      aiApiKey: aiKey.value || '',
-      mapApiKey: mapApiKey.value || '',
-      mapJsKey: mapJsKey.value || '',
-      mapJsSec: mapJsSec.value || '',
-      alipayAppId: alipayAppId.value || '',
-      alipayPrivateKey: alipayPrivateKey.value || '',
-      alipayPublicKey: alipayPublicKey.value || '',
-      alipayGateway: alipayGateway.value || '',
-      alipayReturnUrl: alipayReturnUrl.value || '',
-      alipayNotifyUrl: alipayNotifyUrl.value || ''
-    });
-    setNotice('success', '配置已保存');
-  } catch (err) {
-    const msg = err?.response?.data?.message || '保存失败';
-    setNotice('error', msg);
-  }
-}
-
-async function doAiRecommend() {
-  if (!aiInput.value.trim()) {
-    setNotice('warning', '请输入需求');
+async function submitMerchantReview() {
+  if (!reviewModal.orderId) {
+    reviewError.value = '订单信息缺失，请刷新后重试';
     return;
   }
-  aiLoading.value = true;
-  aiResult.value = '';
-  aiError.value = '';
+  if (reviewSubmitting.value) return;
+
+  const content = String(reviewModal.content || '').trim();
+  if (!reviewModal.rating || Number(reviewModal.rating) < 1 || Number(reviewModal.rating) > 5) {
+    reviewError.value = '请选择 1 到 5 星评分';
+    return;
+  }
+  if (!content) {
+    reviewError.value = '请输入评价内容';
+    return;
+  }
+
+  reviewSubmitting.value = true;
+  reviewError.value = '';
   try {
-    const res = await aiRecommend(aiInput.value.trim());
-    aiResult.value = res.result || '';
-    aiMessages.value.push({ role: 'user', content: aiInput.value.trim() });
-    aiMessages.value.push({ role: 'assistant', content: aiResult.value || '（暂无回复）' });
+    await submitMerchantOrderReview(reviewModal.orderId, {
+      rating: Number(reviewModal.rating),
+      content
+    });
+    closeReviewModal();
+    setNotice('success', '商家评价已提交');
+    await loadMyOrders();
   } catch (err) {
-    const msg = err?.response?.data?.message || 'AI 服务不可用';
-    aiError.value = msg;
+    const msg = err?.response?.data?.message || '评价提交失败';
+    reviewError.value = msg;
     setNotice('error', msg);
   } finally {
-    aiLoading.value = false;
+    reviewSubmitting.value = false;
   }
 }
 
-function clearAiChat() {
-  aiInput.value = '';
-  aiResult.value = '';
-  aiError.value = '';
-  aiMessages.value = [];
-}
-
-function lockTerminal() {
-  terminalUnlocked.value = false;
-  terminalCommand.value = '';
-  terminalSignature.value = '';
-  terminalOutput.value = '';
-}
-
-async function unlockTerminal() {
-  if (!terminalPassword.value) {
-    setNotice('warning', '请输入终端密码');
-    return;
-  }
-  try {
-    const sig = await hmacHex(TERMINAL_SECRET, terminalPassword.value);
-    terminalSignature.value = sig;
-    terminalUnlocked.value = true;
-    setNotice('success', '已解锁终端');
-  } catch (e) {
-    setNotice('error', '解锁失败');
-  }
-}
-
-async function hmacHex(keyHex, message) {
-  const encoder = new TextEncoder();
-  const keyBytes = hexToBytes(keyHex);
-  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message));
-  return bytesToHex(new Uint8Array(sig));
-}
-
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToHex(bytes) {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 </script>
 
 <template>
   <div
-    v-if="isMerchantBlocked"
+    v-if="isMerchantBanned"
     class="blocked-page"
-    :data-variant="merchantBlockVariant"
+    data-variant="BANNED"
   >
     <div class="blocked-card">
-      <div class="blocked-icon">{{ merchantBlockVariant === 'BANNED' ? '⚠' : '!' }}</div>
-      <h2 :class="['blocked-title', merchantBlockVariant === 'BANNED' ? 'blocked-title--danger' : 'blocked-title--warn']">
-        {{ merchantBlockVariant === 'BANNED' ? '您已被封禁！' : '您未被审核！' }}
-      </h2>
-      <p class="blocked-desc">
-        {{ merchantBlockVariant === 'BANNED' ? '请联系管理员了解详情。' : '请等待管理员审核通过后再试。' }}
-      </p>
+      <div class="blocked-icon">X</div>
+      <h2 class="blocked-title blocked-title--danger">您的商家账号已被封禁</h2>
+      <p class="blocked-desc">请联系管理员了解详情。</p>
       <div class="blocked-actions">
         <button class="primary" type="button" @click="handleLogout">退出登录</button>
       </div>
@@ -2329,6 +3028,7 @@ function bytesToHex(bytes) {
       <div class="sidebar__links">
         <template v-if="isAdmin">
           <button :class="['nav-link', currentPage === 'adminOverview' && 'nav-link--active']" @click="go('adminOverview')">概览</button>
+          <button :class="['nav-link', currentPage === 'adminUsers' && 'nav-link--active']" @click="go('adminUsers')">用户</button>
           <button
             :class="['nav-link', 'nav-link--with-badge', currentPage === 'adminMerchants' && 'nav-link--active']"
             @click="go('adminMerchants')"
@@ -2338,28 +3038,23 @@ function bytesToHex(bytes) {
           </button>
           <button :class="['nav-link', currentPage === 'adminOrders' && 'nav-link--active']" @click="go('adminOrders')">订单</button>
           <button :class="['nav-link', currentPage === 'adminRevenue' && 'nav-link--active']" @click="go('adminRevenue')">收益</button>
-          <button :class="['nav-link', currentPage === 'adminStock' && 'nav-link--active']" @click="go('adminStock')">库存告警</button>
-          <button :class="['nav-link', currentPage === 'adminApproval' && 'nav-link--active']" @click="go('adminApproval')">交易审核</button>
-          <button :class="['nav-link', currentPage === 'adminWallet' && 'nav-link--active']" @click="go('adminWallet')">钱包</button>
-          <button :class="['nav-link', currentPage === 'adminLogs' && 'nav-link--active']" @click="go('adminLogs')">日志</button>
-          <button :class="['nav-link', currentPage === 'adminTerminal' && 'nav-link--active']" @click="go('adminTerminal')">终端</button>
-          <button :class="['nav-link', currentPage === 'adminAi' && 'nav-link--active']" @click="go('adminAi')">AI配置</button>
         </template>
         <template v-else>
           <template v-if="auth.role === 'MERCHANT'">
-            <button :class="['nav-link', currentPage === 'merchantUpload' && 'nav-link--active']" @click="go('merchantUpload')">上架商品</button>
-            <button :class="['nav-link', currentPage === 'myShop' && 'nav-link--active']" @click="go('myShop')">我的店铺</button>
-            <button :class="['nav-link', currentPage === 'chat' && 'nav-link--active']" @click="go('chat')">聊天</button>
-            <button :class="['nav-link', currentPage === 'ai' && 'nav-link--active']" @click="go('ai')">AI帮你选</button>
-            <button :class="['nav-link', currentPage === 'walletUser' && 'nav-link--active']" @click="go('walletUser')">钱包</button>
-            <button :class="['nav-link', currentPage === 'orders' && 'nav-link--active']" @click="go('orders')">订单</button>
+            <button :class="['nav-link', currentPage === 'profile' && 'nav-link--active']" @click="go('profile')">商家资料</button>
+            <template v-if="isMerchantApproved">
+              <button :class="['nav-link', currentPage === 'merchantUpload' && 'nav-link--active']" @click="go('merchantUpload')">上架商品</button>
+              <button :class="['nav-link', currentPage === 'myShop' && 'nav-link--active']" @click="go('myShop')">我的店铺</button>
+              <button :class="['nav-link', currentPage === 'merchantStock' && 'nav-link--active']" @click="go('merchantStock')">库存告警</button>
+              <button :class="['nav-link', currentPage === 'chat' && 'nav-link--active']" @click="go('chat')">聊天</button>
+              <button :class="['nav-link', currentPage === 'walletUser' && 'nav-link--active']" @click="go('walletUser')">钱包</button>
+              <button :class="['nav-link', currentPage === 'orders' && 'nav-link--active']" @click="go('orders')">订单</button>
+            </template>
           </template>
           <template v-else-if="auth.role === 'USER'">
             <button :class="['nav-link', currentPage === 'catalog' && 'nav-link--active']" @click="go('catalog')">商品</button>
             <button :class="['nav-link', currentPage === 'profile' && 'nav-link--active']" @click="go('profile')">个人主页</button>
-            <button :class="['nav-link', currentPage === 'ai' && 'nav-link--active']" @click="go('ai')">AI帮你选</button>
             <button :class="['nav-link', currentPage === 'chat' && 'nav-link--active']" @click="go('chat')">聊天</button>
-            <button :class="['nav-link', currentPage === 'walletUser' && 'nav-link--active']" @click="go('walletUser')">钱包</button>
             <button :class="['nav-link', currentPage === 'orders' && 'nav-link--active']" @click="go('orders')">订单</button>
           </template>
           <template v-else>
@@ -2380,7 +3075,7 @@ function bytesToHex(bytes) {
       <div v-if="isLoggedIn" class="user-chip">
         <span>{{ auth.username }}</span>
         <small>{{ auth.role }}</small>
-        <span class="muted">余额 ¥{{ Number(walletBalance).toFixed(2) }}</span>
+        <span class="muted">{{ topAuthHint }}</span>
         <button class="ghost" type="button" @click="handleLogout">退出</button>
       </div>
       <div v-else class="row-inline" style="gap:10px;">
@@ -2417,49 +3112,41 @@ function bytesToHex(bytes) {
       <div class="panel__header">
         <div>
           <p class="eyebrow">商家审核</p>
-          <h3>审批与风控</h3>
+          <h3>待审核商家</h3>
+          <p class="muted">这里只处理商家入驻审核，不包含封禁、批量管理等其他操作。</p>
         </div>
         <div class="filters">
-          <input class="search" v-model="merchantSearch" type="search" placeholder="搜索商家账号" />
+          <button
+            :class="['chip', adminFilters.merchantStatus === 'UNREVIEWED' && 'chip--active']"
+            @click="merchantPage = 1; loadAdminMerchants('UNREVIEWED')"
+          >
+            待补资料
+          </button>
           <button
             :class="['chip', adminFilters.merchantStatus === 'PENDING' && 'chip--active']"
             @click="merchantPage = 1; loadAdminMerchants('PENDING')"
           >
             待审核
           </button>
-          <button
-            :class="['chip', adminFilters.merchantStatus === 'APPROVED' && 'chip--active']"
-            @click="merchantPage = 1; loadAdminMerchants('APPROVED')"
-          >
-            已审核
-          </button>
-          <button
-            :class="['chip', adminFilters.merchantStatus === 'BANNED' && 'chip--active']"
-            @click="merchantPage = 1; loadAdminMerchants('BANNED')"
-          >
-            封禁
-          </button>
-          <button :class="['chip', !adminFilters.merchantStatus && 'chip--active']" @click="merchantPage = 1; loadAdminMerchants('')">
-            全部
-          </button>
         </div>
       </div>
       <div v-if="adminLoading.merchants" class="loading">正在拉取商家...</div>
       <div v-else class="admin-table">
         <div class="admin-table__head">
-          <span class="row-inline">
-            <input type="checkbox" :checked="pagedMerchants.length && selectedMerchants.length && pagedMerchants.every(m => selectedMerchants.includes(m.id))" @change="(e) => toggleSelectAllMerchants(e.target.checked)" />
-            商家
-          </span>
-          <span>状态</span>
+          <span>商家资料</span>
+          <span>审核状态</span>
           <span>操作</span>
         </div>
-        <div v-if="!filteredMerchants.length" class="empty">暂无数据</div>
+        <div v-if="!filteredMerchants.length" class="empty">当前没有待处理的商家审核</div>
         <div v-else v-for="merchant in pagedMerchants" :key="merchant.id" class="admin-table__row">
-          <div class="row-inline">
-            <input type="checkbox" :checked="selectedMerchants.includes(merchant.id)" @change="(e) => toggleMerchant(merchant.id, e.target.checked)" />
-            <strong>{{ merchant.username }}</strong>
-            <p class="muted">ID {{ merchant.id }}</p>
+          <div>
+            <strong>{{ merchant.storeName || merchant.username }}</strong>
+            <p class="muted">账号：{{ merchant.username }} · ID {{ merchant.id }}</p>
+            <p class="muted">邮箱：{{ merchant.email || '未填写' }}</p>
+            <p class="muted">联系人：{{ merchant.contactName || '未填写' }} / {{ merchant.contactPhone || '未填写' }}</p>
+            <p class="muted">经营地址：{{ merchant.businessAddress || '未填写' }}</p>
+            <p class="muted">证照编号：{{ merchant.licenseNumber || '未填写' }}</p>
+            <p v-if="merchant.description" class="muted">说明：{{ merchant.description }}</p>
           </div>
           <div>
             <span class="status-badge" :data-variant="merchant.merchantStatus || 'NONE'">
@@ -2470,22 +3157,10 @@ function bytesToHex(bytes) {
             <button class="ghost" :disabled="adminLoading.updating" @click="changeMerchantStatus(merchant.id, 'APPROVED')">
               通过
             </button>
-            <button class="ghost danger" :disabled="adminLoading.updating" @click="changeMerchantStatus(merchant.id, 'BANNED')">
-              封禁
-            </button>
-            <button class="ghost" :disabled="adminLoading.updating" @click="changeMerchantStatus(merchant.id, 'PENDING')">
-              待审
+            <button class="ghost" :disabled="adminLoading.updating" @click="changeMerchantStatus(merchant.id, 'UNREVIEWED')">
+              退回补充
             </button>
           </div>
-        </div>
-      </div>
-      <div v-if="selectedMerchants.length" class="bulk-actions">
-        <span class="muted">已选 {{ selectedMerchants.length }}</span>
-        <div class="admin-table__actions">
-          <button class="ghost" :disabled="adminLoading.updating" @click="selectedMerchants.forEach(id => changeMerchantStatus(id, 'APPROVED'))">批量通过</button>
-          <button class="ghost danger" :disabled="adminLoading.updating" @click="selectedMerchants.forEach(id => changeMerchantStatus(id, 'BANNED'))">批量封禁</button>
-          <button class="ghost" :disabled="adminLoading.updating" @click="selectedMerchants.forEach(id => changeMerchantStatus(id, 'PENDING'))">批量待审</button>
-          <button class="ghost" @click="clearMerchantSelection()">清空选择</button>
         </div>
       </div>
         <div v-if="filteredMerchants.length" class="pager">
@@ -2493,6 +3168,76 @@ function bytesToHex(bytes) {
           <span class="muted">第 {{ merchantPage }} / {{ merchantTotalPages }} 页</span>
           <button class="ghost" type="button" :disabled="merchantPage === merchantTotalPages" @click="changeMerchantPage(1)">下一页</button>
         </div>
+    </section>
+
+    <section v-if="isAdmin && currentPage === 'adminUsers'" class="admin-console">
+      <div class="page-header-simple">
+        <h1>用户管理</h1>
+      </div>
+      <div class="admin-panel">
+        <div class="panel__header">
+          <div>
+            <h3>用户列表</h3>
+            <p class="muted">查看账号信息，并执行改密、封禁、删除等操作。</p>
+          </div>
+          <button class="ghost" type="button" @click="loadAdminUsers">刷新</button>
+        </div>
+        <div class="filters filters--wrap">
+          <input class="search" v-model="adminUserSearch" type="search" placeholder="搜索用户名 / 邮箱 / 角色 / 店铺" />
+          <div class="row-inline" style="gap:8px; flex-wrap:wrap;">
+            <button :class="['chip', adminUserStatusFilter === 'ALL' && 'chip--active']" @click="adminUserStatusFilter = 'ALL'">全部</button>
+            <button :class="['chip', adminUserStatusFilter === 'ACTIVE' && 'chip--active']" @click="adminUserStatusFilter = 'ACTIVE'">正常</button>
+            <button :class="['chip', adminUserStatusFilter === 'BANNED' && 'chip--active']" @click="adminUserStatusFilter = 'BANNED'">已封禁</button>
+            <button :class="['chip', adminUserStatusFilter === 'DELETED' && 'chip--active']" @click="adminUserStatusFilter = 'DELETED'">已删除</button>
+          </div>
+        </div>
+        <div v-if="adminUsersLoading" class="loading">正在加载用户...</div>
+        <div v-else-if="!filteredAdminUsers.length" class="empty">暂无符合条件的用户</div>
+        <div v-else class="admin-table admin-table--users">
+          <div class="admin-table__head" style="grid-template-columns: 1.2fr 0.9fr 1.1fr 1.2fr 0.8fr 1.5fr;">
+            <span>用户</span>
+            <span>账号状态</span>
+            <span>角色信息</span>
+            <span>商家信息</span>
+            <span>余额</span>
+            <span>操作</span>
+          </div>
+          <div
+            v-for="user in filteredAdminUsers"
+            :key="user.id"
+            class="admin-table__row"
+            style="grid-template-columns: 1.2fr 0.9fr 1.1fr 1.2fr 0.8fr 1.5fr;"
+          >
+            <div>
+              <strong>{{ user.username }}</strong>
+              <p class="muted">ID {{ user.id }}</p>
+              <p class="muted">{{ user.email || '未填写邮箱' }}</p>
+            </div>
+            <div>
+              <span class="status-badge" :data-variant="normalizeAccountStatus(user.accountStatus)">
+                {{ renderAccountStatusLabel(user.accountStatus) }}
+              </span>
+            </div>
+            <div>
+              <p><strong>{{ user.role }}</strong></p>
+              <p v-if="user.role === 'MERCHANT'" class="muted">商家审核：{{ renderStatusLabel(user.merchantStatus) }}</p>
+              <p v-else class="muted">普通账号</p>
+            </div>
+            <div>
+              <p><strong>{{ user.merchantStoreName || '-' }}</strong></p>
+              <p class="muted">{{ user.role === 'MERCHANT' ? '商家资料账号' : '非商家账号' }}</p>
+            </div>
+            <div>￥{{ Number(user.walletBalance || 0).toFixed(2) }}</div>
+            <div class="admin-table__actions">
+              <button class="ghost" type="button" :disabled="normalizeAccountStatus(user.accountStatus) === 'DELETED'" @click="openPwdModal(user)">改密码</button>
+              <button class="ghost" type="button" :disabled="!canManageAdminUser(user)" @click="toggleAdminUserBan(user)">
+                {{ normalizeAccountStatus(user.accountStatus) === 'BANNED' ? '解封' : '封禁' }}
+              </button>
+              <button class="ghost danger" type="button" :disabled="!canManageAdminUser(user)" @click="removeAdminUser(user)">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section v-if="isAdmin && currentPage === 'adminOrders'" id="admin-orders" class="admin-console">
@@ -2505,7 +3250,7 @@ function bytesToHex(bytes) {
           <h3>实时订单</h3>
         </div>
         <div class="filters">
-          <input class="search" v-model="orderSearch" type="search" placeholder="搜索订单号/客户" />
+          <input class="search" v-model="orderSearch" type="search" placeholder="搜索订单号 / 客户" />
           <div class="muted">GMV ￥{{ Number(adminOverview.totalRevenue || 0).toFixed(2) }}</div>
         </div>
       </div>
@@ -2531,61 +3276,12 @@ function bytesToHex(bytes) {
             <span class="status-badge" data-variant="DEFAULT">{{ formatOrderStatusWithPayMethod(order.status, order.payMethod) }}</span>
           </div>
           <div>{{ formatDateTime(order.createdAt) }}</div>
-          <div class="admin-table__actions" v-if="order.status === 'REFUND_REQUESTED'">
-            <button class="primary" type="button" @click="approveRefundAdminAction(order.id, true)">同意退款</button>
-            <button class="ghost danger" type="button" @click="approveRefundAdminAction(order.id, false)">驳回</button>
-          </div>
         </div>
       </div>
         <div v-if="filteredOrders.length" class="pager">
           <button class="ghost" type="button" :disabled="orderPage === 1" @click="changeOrderPage(-1)">上一页</button>
           <span class="muted">第 {{ orderPage }} / {{ orderTotalPages }} 页</span>
           <button class="ghost" type="button" :disabled="orderPage === orderTotalPages" @click="changeOrderPage(1)">下一页</button>
-        </div>
-    </section>
-
-    <section v-if="isAdmin && currentPage === 'adminStock'" id="admin-stock" class="admin-console">
-      <div class="page-header-simple">
-        <h1>库存告警</h1>
-      </div>
-      <div class="panel__header">
-        <div>
-          <p class="eyebrow">库存告警</p>
-          <h3>低于阈值（≤{{ lowStockThreshold }}）</h3>
-        </div>
-        <div class="filters">
-          <button class="ghost" @click="loadLowStock" :disabled="lowStockLoading">刷新</button>
-        </div>
-      </div>
-      <div v-if="lowStockLoading" class="loading">正在检查库存...</div>
-      <div v-else class="admin-table admin-table--orders">
-        <div class="admin-table__head">
-          <span>商品</span>
-          <span>库存</span>
-          <span>分类</span>
-          <span>价格</span>
-          <span>图片</span>
-        </div>
-        <div v-if="!lowStock.length" class="empty">暂无低库存商品</div>
-        <div v-else v-for="item in pagedLowStock" :key="item.id" class="admin-table__row">
-          <div>
-            <strong>{{ item.name }}</strong>
-            <p class="muted">ID {{ item.id }}</p>
-          </div>
-          <div>
-            <span class="status-badge" data-variant="BANNED">库存 {{ item.stock }}</span>
-          </div>
-          <div>{{ item.category?.name || '未分组' }}</div>
-          <div>￥{{ Number(item.price || 0).toFixed(2) }}</div>
-          <div>
-            <img :src="formatImg(item.imageUrl)" alt="" class="thumb" />
-          </div>
-        </div>
-      </div>
-        <div v-if="lowStock.length" class="pager">
-          <button class="ghost" type="button" :disabled="lowStockPage === 1" @click="changeLowStockPage(-1)">上一页</button>
-          <span class="muted">第 {{ lowStockPage }} / {{ lowStockTotalPages }} 页</span>
-          <button class="ghost" type="button" :disabled="lowStockPage === lowStockTotalPages" @click="changeLowStockPage(1)">下一页</button>
         </div>
     </section>
 
@@ -2677,7 +3373,7 @@ function bytesToHex(bytes) {
                 <input type="file" accept="image/*" @change="onFileChange" />
                 <span v-if="productForm.imageUrl" class="muted">已上传</span>
               </div>
-              <small class="muted">支持图片文件，5MB以内</small>
+              <small class="muted">支持图片文件，建议 2MB 以内</small>
             </label>
             <label>
               商品视频（可选）
@@ -2696,246 +3392,88 @@ function bytesToHex(bytes) {
       </div>
     </section>
 
-    <section v-if="isAdmin && currentPage === 'adminApproval'" class="admin-console">
-      <div class="page-header-simple">
-        <h1>交易审核</h1>
-      </div>
-      <div class="admin-panel">
-        <div class="panel__header">
-          <div>
-            <p class="eyebrow">审核档位</p>
-            <h3>当前：{{ approvalLevel === 'HIGH' ? '高级（需审批）' : '低级（自动通过）' }}</h3>
-          </div>
-          <div class="filters">
-            <button class="ghost" :class="approvalLevel === 'LOW' && 'chip--active'" @click="saveApprovalLevel('LOW')">低档</button>
-            <button class="ghost" :class="approvalLevel === 'HIGH' && 'chip--active'" @click="saveApprovalLevel('HIGH')">高档</button>
-          </div>
-        </div>
-        <div class="admin-table admin-table--orders">
-          <div class="admin-table__head">
-            <span>订单号</span>
-            <span>买家</span>
-            <span>金额</span>
-            <span>状态</span>
-            <span>操作</span>
-          </div>
-          <div v-if="!pendingOrders.length" class="empty">暂无待审核订单</div>
-          <div v-else v-for="o in pendingOrders" :key="o.id" class="admin-table__row">
-            <span>{{ o.orderNumber }}</span>
-            <span>{{ o.customerName }}</span>
-            <span>¥{{ Number(o.totalAmount || 0).toFixed(2) }}</span>
-            <span>{{ formatOrderStatusWithPayMethod(o.status, o.payMethod) }}</span>
-            <div class="admin-table__actions">
-              <button class="primary" type="button" @click="approvePending(o.id, true)">同意</button>
-              <button class="ghost danger" type="button" @click="approvePending(o.id, false)">拒绝</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section v-if="isAdmin && currentPage === 'adminWallet'" class="admin-console">
-      <div class="page-header-simple">
-        <h1>钱包管理</h1>
-      </div>
-      <div class="admin-panel">
-        <div class="panel__header">
-          <h3>用户余额与密码</h3>
-          <button class="ghost" type="button" @click="loadAdminWallets">刷新</button>
-        </div>
-        <div v-if="!adminWalletUsers.length" class="empty">暂无数据</div>
-        <div v-else class="admin-table">
-          <div class="admin-table__head" style="grid-template-columns: 1fr 1fr 1fr 1fr;">
-            <span>用户</span><span>角色</span><span>余额</span><span>操作</span>
-          </div>
-          <div
-            v-for="u in adminWalletUsers"
-            :key="u.id"
-            class="admin-table__row"
-            style="grid-template-columns: 1fr 1fr 1fr 1fr;"
-          >
-            <span>{{ u.username }}</span>
-            <span>{{ u.role }}</span>
-            <span>¥{{ Number(u.walletBalance || 0).toFixed(2) }}</span>
-            <div class="row-inline" style="gap:8px; flex-wrap: wrap;">
-              <button class="ghost danger" type="button" @click="openPwdModal(u)">改密码</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section v-if="isAdmin && currentPage === 'adminLogs'" class="admin-console">
-      <div class="page-header-simple">
-        <h1>日志</h1>
-      </div>
-      <div class="admin-panel">
-        <div class="panel__header">
-          <h3>系统日志（最近 {{ systemLogLines }} 行）</h3>
-          <div class="row-inline">
-            <input style="width:100px" type="number" min="50" v-model="systemLogLines" />
-            <button class="ghost" type="button" @click="loadSystemLogs">刷新</button>
-            <button class="ghost" type="button" @click="downloadSystemLogs">下载</button>
-          </div>
-        </div>
-        <pre class="log-box">{{ systemLogs }}</pre>
-      </div>
-
-      <div class="admin-panel">
-        <div class="panel__header">
-          <h3>登录日志</h3>
-          <button class="ghost" type="button" @click="loadLoginLogs">刷新</button>
-        </div>
-        <div v-if="!loginLogs.length" class="empty">暂无</div>
-        <div v-else class="admin-table">
-          <div class="admin-table__head" style="grid-template-columns: 1.2fr 1fr 1fr 1fr;">
-            <span>用户</span><span>IP</span><span>结果</span><span>时间</span>
-          </div>
-          <div
-            v-for="log in pagedLoginLogs"
-            :key="log.id"
-            class="admin-table__row"
-            style="grid-template-columns: 1.2fr 1fr 1fr 1fr;"
-          >
-            <span>{{ log.username }}</span>
-            <span>{{ log.ip || '-' }}</span>
-            <span>{{ log.success ? '成功' : '失败' }}</span>
-            <span>{{ formatDateTime(log.createdAt) }}</span>
-          </div>
-          <div class="pager" v-if="loginLogs.length > loginLogSize">
-            <button class="ghost" type="button" :disabled="loginLogPage === 1" @click="loginLogPage = loginLogPage - 1">上一页</button>
-            <span class="muted">第 {{ loginLogPage }} / {{ loginLogTotal }} 页</span>
-            <button class="ghost" type="button" :disabled="loginLogPage === loginLogTotal" @click="loginLogPage = loginLogPage + 1">下一页</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <section v-if="isAdmin && currentPage === 'adminRevenue'" class="admin-console">
       <div class="page-header-simple">
         <h1>收益</h1>
       </div>
-      <div class="admin-panel">
-        <div class="panel__header">
-          <h3>佣金与开店费</h3>
-          <button class="ghost" type="button" @click="loadAdminRevenue">刷新</button>
-        </div>
+        <div class="admin-panel">
+          <div class="panel__header">
+            <div>
+              <h3>平台资金流水</h3>
+              <p class="muted">当前平台余额 ￥{{ Number(walletBalance || 0).toFixed(2) }}</p>
+            </div>
+            <button class="ghost" type="button" @click="loadAdminRevenue">刷新</button>
+          </div>
         <div v-if="!adminRevenueLogs.length" class="empty">暂无收益记录</div>
         <div v-else class="admin-table admin-table--orders">
-          <div class="admin-table__head" style="grid-template-columns: 1fr 1fr 1fr 1fr;">
+          <div class="admin-table__head" style="grid-template-columns: 1fr 0.8fr 0.9fr 1.4fr 0.9fr;">
             <span>时间</span>
             <span>金额</span>
             <span>类型</span>
             <span>备注/关联</span>
+            <span>当时余额</span>
           </div>
           <div
             v-for="log in adminRevenueLogs"
             :key="log.id"
             class="admin-table__row"
-            style="grid-template-columns: 1fr 1fr 1fr 1fr;"
+            style="grid-template-columns: 1fr 0.8fr 0.9fr 1.4fr 0.9fr;"
           >
             <span>{{ formatDateTime(log.createdAt) }}</span>
-            <span>¥{{ Number(log.amount || 0).toFixed(2) }}</span>
+            <span>￥{{ Number(log.amount || 0).toFixed(2) }}</span>
             <span>{{ formatPaymentType(log.type) }}</span>
-            <span>{{ log.remark || '-' }} {{ log.orderNumber ? '(订单号 ' + log.orderNumber + ')' : '' }}</span>
+            <span>{{ log.remark || '-' }} {{ log.orderNumber ? '（订单号：' + log.orderNumber + '）' : '' }}</span>
+            <span>￥{{ Number(log.balanceAfter || 0).toFixed(2) }}</span>
           </div>
         </div>
       </div>
     </section>
 
-    <section v-if="isAdmin && currentPage === 'adminAi'" class="admin-console">
-      <div class="page-header-simple">
-        <h1>AI配置</h1>
-      </div>
-      <div class="admin-panel">
-          <div class="panel__header">
-          <h3>设置 Kimi API Key / 位置服务 Key</h3>
-        </div>
-        <div class="auth-form">
-          <label>
-            API Key
-            <input v-model="aiKey" type="text" placeholder="请粘贴 Kimi API Key" />
-          </label>
-          <label>
-            逆地理 Web 服务 Key（高德）
-            <input v-model="mapApiKey" type="text" placeholder="用于后端逆地理解析，建议绑定服务器IP" />
-          </label>
-          <label>
-            JS 地图 Key（高德 JS API）
-            <input v-model="mapJsKey" type="text" placeholder="用于前端地图展示，需绑定域名/Referer" />
-          </label>
-          <label>
-            JS 安全密钥 (securityJsCode)
-            <input v-model="mapJsSec" type="text" placeholder="配合 JS Key 使用" />
-          </label>
-          <div class="divider"></div>
-          <label>
-            支付宝 App ID（沙箱）
-            <input v-model="alipayAppId" type="text" placeholder="支付宝沙箱 app_id" />
-          </label>
-          <label>
-            支付宝网关
-            <input v-model="alipayGateway" type="text" placeholder="默认 https://openapi.alipaydev.com/gateway.do" />
-          </label>
-          <label>
-            支付成功 return_url
-            <input v-model="alipayReturnUrl" type="text" placeholder="支付完成跳转地址" />
-          </label>
-          <label>
-            支付回调 notify_url
-            <input v-model="alipayNotifyUrl" type="text" placeholder="后端通知 URL（公网可达）" />
-          </label>
-          <label>
-            应用私钥 (RSA2)
-            <textarea v-model="alipayPrivateKey" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
-          </label>
-          <label>
-            支付宝公钥
-            <textarea v-model="alipayPublicKey" rows="3" placeholder="-----BEGIN PUBLIC KEY-----"></textarea>
-          </label>
-          <div class="row-inline" style="justify-content:flex-end; gap:10px;">
-            <button class="ghost" type="button" @click="loadAiKey">重置</button>
-            <button class="primary" type="button" @click="saveAiKeyValue">保存</button>
+    <section v-else-if="currentPage === 'merchantStock'" class="content content--full">
+      <div class="content__main">
+        <div class="page-header-simple" style="align-items:flex-start;">
+          <div>
+            <p class="eyebrow">库存告警</p>
+            <h2>我的低库存商品</h2>
+            <p class="muted">这里只显示当前商家名下库存低于阈值的商品，方便及时补货。</p>
           </div>
-          <small class="muted">仅保存在后端，不在前端暴露。</small>
-        </div>
-      </div>
-    </section>
-
-    <section v-if="isAdmin && currentPage === 'adminTerminal'" class="admin-console">
-      <div class="page-header-simple">
-        <h1>终端</h1>
-      </div>
-      <div class="admin-panel">
-        <div class="panel__header">
-          <h3>执行命令</h3>
-          <small class="muted">需输入密码解锁</small>
-        </div>
-        <div v-if="!terminalUnlocked" class="form">
-          <label>
-            终端密码
-            <input v-model="terminalPassword" type="text" placeholder="终端密码" />
-          </label>
-          <div class="row-inline" style="justify-content:flex-end; gap:10px;">
-            <button class="ghost" type="button" @click="unlockTerminal">解锁</button>
+          <div class="row-inline" style="gap:10px; flex-wrap:wrap;">
+            <label class="muted" style="display:flex; align-items:center; gap:8px;">
+              阈值
+              <input v-model.number="lowStockThreshold" type="number" min="0" style="width:88px;" />
+            </label>
+            <button class="ghost" type="button" @click="loadLowStock" :disabled="lowStockLoading">刷新</button>
           </div>
         </div>
-        <div v-else class="form">
-          <div class="terminal-shell">
-            <pre class="terminal-box">{{ terminalOutput || '终端已解锁，输入命令...' }}</pre>
-            <div class="terminal-line">
-              <span class="prompt">{{ terminalPrompt }}</span>
-              <input
-                class="terminal-inputline"
-                v-model="terminalCommand"
-                type="text"
-                placeholder="输入命令并回车，例：mysql -uroot -p密码 -e show databases;"
-                @keyup.enter="runTerminalCommand"
-              />
-              <button class="ghost" type="button" @click="runTerminalCommand">执行</button>
-              <button class="ghost danger" type="button" @click="lockTerminal">上锁</button>
+        <div v-if="lowStockLoading" class="loading">正在检查库存...</div>
+        <div v-else class="admin-table admin-table--orders">
+          <div class="admin-table__head">
+            <span>商品</span>
+            <span>库存</span>
+            <span>分类</span>
+            <span>价格</span>
+            <span>图片</span>
+          </div>
+          <div v-if="!lowStock.length" class="empty">当前没有低库存商品</div>
+          <div v-else v-for="item in pagedLowStock" :key="item.id" class="admin-table__row">
+            <div>
+              <strong>{{ item.name }}</strong>
+              <p class="muted">ID {{ item.id }}</p>
+            </div>
+            <div>
+              <span class="status-badge" data-variant="BANNED">库存 {{ item.stock }}</span>
+            </div>
+            <div>{{ item.category?.name || '未分类' }}</div>
+            <div>￥{{ Number(item.price || 0).toFixed(2) }}</div>
+            <div>
+              <img :src="formatImg(item.imageUrl)" alt="" class="thumb" />
             </div>
           </div>
+        </div>
+        <div v-if="lowStock.length" class="pager">
+          <button class="ghost" type="button" :disabled="lowStockPage === 1" @click="changeLowStockPage(-1)">上一页</button>
+          <span class="muted">第 {{ lowStockPage }} / {{ lowStockTotalPages }} 页</span>
+          <button class="ghost" type="button" :disabled="lowStockPage === lowStockTotalPages" @click="changeLowStockPage(1)">下一页</button>
         </div>
       </div>
     </section>
@@ -2947,21 +3485,32 @@ function bytesToHex(bytes) {
             <p class="eyebrow">新品列表</p>
             <h2>MK 男士服装</h2>
           </div>
-          <div class="filters">
-            <button
-              :class="['chip', activeCategory === 'all' && 'chip--active']"
-              @click="selectCategory('all')"
-            >
-              全部
-            </button>
-            <button
-              v-for="cat in categories"
-              :key="cat.id"
-              :class="['chip', activeCategory === cat.id && 'chip--active']"
-              @click="selectCategory(cat.id)"
-            >
-              {{ cat.name }}
-            </button>
+          <div class="catalog-toolbar-actions">
+            <div class="filters">
+              <button
+                :class="['chip', activeCategory === 'all' && 'chip--active']"
+                @click="selectCategory('all')"
+              >
+                全部
+              </button>
+              <button
+                v-for="cat in categories"
+                :key="cat.id"
+                :class="['chip', activeCategory === cat.id && 'chip--active']"
+                @click="selectCategory(cat.id)"
+              >
+                {{ cat.name }}
+              </button>
+            </div>
+            <label class="catalog-store-filter">
+              <span class="muted">店铺筛选</span>
+              <select :value="selectedStoreId" @change="selectStore($event.target.value)">
+                <option value="all">全部店铺</option>
+                <option v-for="store in catalogStoreOptions" :key="store.id" :value="store.id">
+                  {{ store.name }} · {{ renderAverageRating(store.rating) }} 分 · {{ store.productCount }} 件商品
+                </option>
+              </select>
+            </label>
           </div>
         </div>
 
@@ -2979,7 +3528,15 @@ function bytesToHex(bytes) {
             <div class="card__body">
               <div class="card__header">
                 <h3>{{ product.name }}</h3>
-              <div class="price">¥{{ Number(product.price).toFixed(2) }}</div>
+              <div class="price">￥{{ Number(product.price).toFixed(2) }}</div>
+              </div>
+              <div class="catalog-store-line">
+                <strong>{{ resolveStoreName(product) }}</strong>
+                <span class="muted">店铺评分 {{ renderAverageRating(product.merchantRatingAverage) }} / 5</span>
+              </div>
+              <div class="catalog-metrics">
+                <span class="tag tag--soft">销量 {{ Number(product.salesCount || 0) }}</span>
+                <span class="tag tag--soft">店铺评价 {{ Number(product.merchantRatingCount || 0) }}</span>
               </div>
               <p class="muted">{{ product.description }}</p>
               <div v-if="product.sizesDetail?.length" class="size-chips">
@@ -2991,7 +3548,7 @@ function bytesToHex(bytes) {
                   type="button"
                   @click.stop="selectSize(product.id, sz.label)"
                 >
-                  {{ sz.label }} · 库存{{ sz.stock }}
+                  {{ sz.label }} / 库存{{ sz.stock }}
                 </button>
               </div>
               <p class="muted" v-else>库存：{{ product.stock }}</p>
@@ -3005,7 +3562,8 @@ function bytesToHex(bytes) {
             </div>
           </div>
         </div>
-        <div v-if="products.length" class="pager">
+        <div v-if="!loadingProducts && !filteredCatalogProducts.length" class="empty">当前筛选条件下暂无商品</div>
+        <div v-if="filteredCatalogProducts.length" class="pager">
           <button class="ghost" type="button" :disabled="productPage === 1" @click="changeProductPage(-1)">上一页</button>
           <span class="muted">第 {{ productPage }} / {{ productTotalPages }} 页</span>
           <button class="ghost" type="button" :disabled="productPage === productTotalPages" @click="changeProductPage(1)">下一页</button>
@@ -3023,6 +3581,30 @@ function bytesToHex(bytes) {
           <small class="muted">挑选商品加入购物车即可下单</small>
         </div>
         <div v-else class="cart-table__body">
+          <div class="cart-merchant-overview">
+            <div class="cart-merchant-overview__metric">
+              <strong>{{ cartCount }}</strong>
+              <span>件商品</span>
+            </div>
+            <div class="cart-merchant-overview__metric">
+              <strong>{{ cartMerchantCount }}</strong>
+              <span>家商家</span>
+            </div>
+            <div class="cart-merchant-overview__metric">
+              <strong>￥{{ cartTotal }}</strong>
+              <span>待结算</span>
+            </div>
+          </div>
+          <div class="merchant-group-list">
+            <div v-for="group in cartMerchantGroups" :key="group.ownerId" class="merchant-group-card">
+              <div class="row-inline" style="justify-content:space-between;">
+                <strong>{{ group.ownerName }}</strong>
+                <span class="tag">{{ group.count }} 件</span>
+              </div>
+              <p class="muted">{{ group.previewText }}</p>
+              <strong>￥{{ group.subtotalText }}</strong>
+            </div>
+          </div>
           <div class="cart-table__row cart-table__head">
             <span>商品</span>
             <span>尺码</span>
@@ -3059,12 +3641,7 @@ function bytesToHex(bytes) {
             <p class="eyebrow">我的店铺</p>
             <h2>我上架的商品</h2>
           </div>
-          <div class="row-inline" style="gap:10px;">
-            <span class="status-pill" :data-variant="merchantSubActive ? 'APPROVED' : 'PENDING'">
-              开店费：{{ merchantSubActive ? '已缴至 ' + (subscriptionUntil ? new Date(subscriptionUntil).toLocaleDateString() : '') : '未缴或已过期' }}
-            </span>
-            <button class="ghost" type="button" @click="payMerchantSubscription">缴纳本月开店费（¥500）</button>
-          </div>
+          <p class="muted">审核通过后即可上架商品，成交后平台按订单金额自动收取 5% 佣金。</p>
           <div class="row-inline">
             <button class="ghost" type="button" @click="loadMyProducts">刷新</button>
             <button class="ghost" type="button" :disabled="myProductPage === 1" @click="changeMyProductPage(-1)">上一页</button>
@@ -3089,12 +3666,12 @@ function bytesToHex(bytes) {
             <div class="card__body">
               <div class="card__header">
                 <h3>{{ product.name }}</h3>
-                <div class="price">¥{{ Number(product.price).toFixed(2) }}</div>
+                <div class="price">￥{{ Number(product.price).toFixed(2) }}</div>
               </div>
               <p class="muted">{{ product.description }}</p>
               <div v-if="product.sizesDetail?.length" class="size-chips">
                 <span v-for="sz in product.sizesDetail" :key="sz.label" class="tag">
-                  {{ sz.label }} · {{ sz.stock }}
+                  {{ sz.label }} / {{ sz.stock }}
                 </span>
               </div>
               <p class="muted" v-else>库存：{{ product.stock }}</p>
@@ -3131,11 +3708,11 @@ function bytesToHex(bytes) {
             <p class="muted">名称：{{ editingProductOriginal.name }}</p>
             <div v-if="editingProductOriginal.sizesDetail?.length" class="size-chips">
               <span v-for="sz in editingProductOriginal.sizesDetail" :key="sz.label" class="tag">
-                {{ sz.label }} · {{ sz.stock }}
+                {{ sz.label }} / {{ sz.stock }}
               </span>
             </div>
             <p class="muted" v-else>库存：{{ editingProductOriginal.stock }}</p>
-            <p class="muted">价格：¥{{ Number(editingProductOriginal.price || 0).toFixed(2) }}</p>
+            <p class="muted">价格：￥{{ Number(editingProductOriginal.price || 0).toFixed(2) }}</p>
             <p class="muted">描述：{{ editingProductOriginal.description }}</p>
           </div>
           <form class="manager-form" @submit.prevent="saveProduct">
@@ -3196,13 +3773,13 @@ function bytesToHex(bytes) {
                 <input type="file" accept="image/*" @change="onFileChange" />
                 <span v-if="productForm.imageUrl" class="muted">已上传</span>
               </div>
-              <small class="muted">支持图片文件，5MB以内</small>
+              <small class="muted">支持图片文件，建议 2MB 以内</small>
             </label>
             <label>
               商品视频（可选）
               <div class="upload-row">
                 <input type="file" accept="video/*" @change="onVideoChange" />
-                <span v-if="productForm.videoUrl" class="muted">已上传/已设置</span>
+                <span v-if="productForm.videoUrl" class="muted">已上传或已设置</span>
               </div>
               <input v-model="productForm.videoUrl" type="text" placeholder="或粘贴视频链接 https://..." />
             </label>
@@ -3243,7 +3820,7 @@ function bytesToHex(bytes) {
           <div v-for="item in cart" :key="item.key" class="cart__item">
             <div>
               <p class="cart__name">{{ item.name }}</p>
-              <p class="muted">尺码：{{ item.sizeLabel || '默认' }} · 库存{{ item.stock }}</p>
+              <p class="muted">尺码：{{ item.sizeLabel || '默认' }} / 库存{{ item.stock }}</p>
               <p class="muted">￥{{ Number(item.price).toFixed(2) }}</p>
             </div>
             <div class="cart__actions">
@@ -3256,7 +3833,36 @@ function bytesToHex(bytes) {
         </div>
         <div class="divider"></div>
         <div class="form">
-          <p class="muted">提交后将在弹窗里选择收货地址与支付方式。</p>
+          <div class="checkout-insight">
+            <div class="checkout-insight__header">
+              <div>
+                <p class="eyebrow">下单预览</p>
+                <h4>{{ cartMerchantCount }} 家商家 · {{ cartCount }} 件商品</h4>
+              </div>
+              <span class="tag">{{ cartMerchantCount > 1 ? '系统自动拆单' : '单商家订单' }}</span>
+            </div>
+            <p class="muted">
+              {{ cartMerchantCount > 1 ? `系统会按商家拆成 ${cartMerchantCount} 笔订单，但仍可一次完成支付。` : '本次下单将生成 1 笔订单，支付后进入平台托管。' }}
+            </p>
+            <div class="merchant-group-list merchant-group-list--compact">
+              <div v-for="group in cartMerchantGroups" :key="group.ownerId" class="merchant-group-card merchant-group-card--compact">
+                <div class="row-inline" style="justify-content:space-between;">
+                  <strong>{{ group.ownerName }}</strong>
+                  <span class="muted">{{ group.count }} 件</span>
+                </div>
+                <p class="muted">{{ group.previewText }}</p>
+                <strong>￥{{ group.subtotalText }}</strong>
+              </div>
+            </div>
+            <div v-if="checkoutPreviewAddress" class="checkout-address-preview">
+              <span class="tag">常用地址</span>
+              <div>
+                <strong>{{ checkoutPreviewAddress.recipientName }} {{ checkoutPreviewAddress.phone }}</strong>
+                <p class="muted">{{ checkoutPreviewAddress.address }}</p>
+              </div>
+            </div>
+            <p v-else class="muted">提交后将在弹窗里选择收货地址与支付方式。</p>
+          </div>
           <div class="summary">
             <span>合计</span>
             <strong>￥{{ cartTotal }}</strong>
@@ -3270,83 +3876,183 @@ function bytesToHex(bytes) {
 
     <section v-else-if="currentPage === 'profile'" class="content content--full">
       <div class="content__main">
-        <div class="page-header-simple" style="align-items:flex-start;">
-          <div>
-            <p class="eyebrow">个人主页</p>
-            <h2>账户与地址</h2>
-            <p class="muted">修改密码 · 管理常用收货地址</p>
-          </div>
-          <div class="row-inline" style="gap:10px;">
-            <button class="ghost" type="button" @click="loadAddresses">刷新地址</button>
-            <button class="primary" type="button" @click="openAddressModal()">新增地址</button>
-          </div>
-        </div>
-        <div class="profile-grid">
-          <div class="profile-card">
-            <div class="panel__header" style="margin-bottom:12px;">
-              <h3>修改密码</h3>
-              <small class="muted">保存后请使用新密码登录</small>
+        <template v-if="auth.role === 'MERCHANT'">
+          <div class="page-header-simple" style="align-items:flex-start;">
+            <div>
+              <p class="eyebrow">商家资料</p>
+              <h2>{{ isMerchantApproved ? '店铺资料' : '完善入驻资料' }}</h2>
+              <p class="muted">
+                {{ isMerchantApproved ? '审核已通过，可继续维护店铺资料。' : '审核通过前仅可填写商家基本信息并提交管理员审核。' }}
+              </p>
             </div>
-            <div class="auth-form">
-              <label>
-                旧密码
-                <input v-model="passwordForm.oldPassword" type="password" placeholder="请输入旧密码" />
-              </label>
-              <label>
-                新密码
-                <input v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" />
-              </label>
-              <label>
-                确认新密码
-                <input v-model="passwordForm.confirm" type="password" placeholder="请再次输入新密码" />
-              </label>
-              <div class="row-inline" style="justify-content:flex-end; gap:10px;">
-                <button class="primary" type="button" :disabled="passwordSubmitting" @click="changePassword">
-                  {{ passwordSubmitting ? '提交中...' : '保存密码' }}
+            <div class="status-pill" :data-variant="auth.merchantStatus || 'NONE'">
+              审核状态：{{ merchantStatusLabel }}
+            </div>
+          </div>
+          <div class="profile-grid">
+            <div class="profile-card">
+              <div class="panel__header" style="margin-bottom:12px;">
+                <div>
+                  <h3>基本信息</h3>
+                  <small class="muted">管理员会根据这些资料完成商家审核</small>
+                </div>
+                <button class="ghost" type="button" :disabled="merchantProfileLoading" @click="loadMerchantProfile">
+                  {{ merchantProfileLoading ? '刷新中...' : '刷新资料' }}
                 </button>
               </div>
-            </div>
-          </div>
-          <div class="profile-card">
-            <div class="panel__header" style="margin-bottom:12px;">
-              <h3>收货地址</h3>
-              <div class="row-inline" style="gap:8px;">
-                <button class="ghost" type="button" @click="loadAddresses">刷新</button>
-                <button class="ghost" type="button" @click="openAddressModal()">新增</button>
-              </div>
-            </div>
-            <div v-if="!addressList.length" class="empty" style="margin:0;">
-              <p>还没有收货地址</p>
-              <small class="muted">可以使用定位或地图选点快速添加</small>
-            </div>
-            <div v-else class="address-grid">
-              <div v-for="addr in addressList" :key="addr.id" class="address-card">
-                <div class="row-inline" style="justify-content: space-between; width:100%;">
-                  <div>
-                    <strong>{{ addr.recipientName }}</strong>
-                    <span class="muted" style="margin-left:8px;">{{ addr.phone }}</span>
-                  </div>
-                  <div class="row-inline" style="gap:6px;">
-                    <span v-if="addr.default" class="tag">默认</span>
-                    <button class="ghost" type="button" @click.stop="markDefaultAddress(addr.id)">设为默认</button>
-                    <button class="ghost" type="button" @click.stop="openAddressModal(addr)">编辑</button>
-                    <button class="ghost danger" type="button" @click.stop="removeAddress(addr.id)">删除</button>
-                  </div>
+              <form class="auth-form" @submit.prevent="submitMerchantProfile(false)">
+                <label>
+                  店铺名称
+                  <input v-model="merchantProfile.storeName" type="text" maxlength="120" placeholder="请输入店铺名称" />
+                </label>
+                <label>
+                  联系人
+                  <input v-model="merchantProfile.contactName" type="text" maxlength="80" placeholder="请输入联系人姓名" />
+                </label>
+                <label>
+                  联系电话
+                  <input v-model="merchantProfile.contactPhone" type="text" maxlength="30" placeholder="请输入联系电话" />
+                </label>
+                <label>
+                  经营地址
+                  <input v-model="merchantProfile.businessAddress" type="text" maxlength="255" placeholder="请输入经营地址" />
+                </label>
+                <label>
+                  证照编号
+                  <input v-model="merchantProfile.licenseNumber" type="text" maxlength="80" placeholder="请输入营业执照或统一社会信用代码" />
+                </label>
+                <label>
+                  店铺说明
+                  <textarea v-model="merchantProfile.description" maxlength="500" placeholder="补充主营品类、经营说明等（可选）"></textarea>
+                </label>
+                <div class="auth-status">
+                  <p class="muted">资料要求</p>
+                  <p v-if="auth.merchantStatus === 'UNREVIEWED'" class="muted">请先填写完整资料，再点击“提交审核”。</p>
+                  <p v-else-if="auth.merchantStatus === 'PENDING'" class="muted">资料已提交，管理员审核前你仍可修改并重新提交。</p>
+                  <p v-else class="muted">商家已审核通过，保存后将直接更新店铺资料。</p>
                 </div>
-                <p class="muted" style="margin-top:6px;">{{ addr.address }}</p>
+                <div class="row-inline" style="justify-content:flex-end; gap:10px;">
+                  <button class="ghost" type="submit" :disabled="merchantProfileSubmitting || merchantProfileLoading">
+                    {{ merchantProfileSubmitting ? '提交中...' : '保存资料' }}
+                  </button>
+                  <button
+                    v-if="!isMerchantApproved"
+                    class="primary"
+                    type="button"
+                    :disabled="merchantProfileSubmitting || merchantProfileLoading"
+                    @click="submitMerchantProfile(true)"
+                  >
+                    {{ merchantProfileSubmitting ? '提交中...' : auth.merchantStatus === 'PENDING' ? '重新提交审核' : '提交审核' }}
+                  </button>
+                </div>
+              </form>
+            </div>
+            <div v-if="isMerchantApproved" class="profile-card">
+              <div class="panel__header" style="margin-bottom:12px;">
+                <h3>修改密码</h3>
+                <small class="muted">保存后请使用新密码登录</small>
+              </div>
+              <div class="auth-form">
+                <label>
+                  旧密码
+                  <input v-model="passwordForm.oldPassword" type="password" placeholder="请输入旧密码" />
+                </label>
+                <label>
+                  新密码
+                  <input v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" />
+                </label>
+                <label>
+                  确认新密码
+                  <input v-model="passwordForm.confirm" type="password" placeholder="请再一次输入新密码" />
+                </label>
+                <div class="row-inline" style="justify-content:flex-end; gap:10px;">
+                  <button class="primary" type="button" :disabled="passwordSubmitting" @click="changePassword">
+                    {{ passwordSubmitting ? '提交中...' : '保存密码' }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </template>
+        <template v-else>
+          <div class="page-header-simple" style="align-items:flex-start;">
+            <div>
+              <p class="eyebrow">个人主页</p>
+              <h2>账户与地址</h2>
+              <p class="muted">修改密码 / 管理常用收货地址</p>
+            </div>
+            <div class="row-inline" style="gap:10px;">
+              <button class="ghost" type="button" @click="loadAddresses">刷新地址</button>
+              <button class="primary" type="button" @click="openAddressModal()">新增地址</button>
+            </div>
+          </div>
+          <div class="profile-grid">
+            <div class="profile-card">
+              <div class="panel__header" style="margin-bottom:12px;">
+                <h3>修改密码</h3>
+                <small class="muted">保存后请使用新密码登录</small>
+              </div>
+              <div class="auth-form">
+                <label>
+                  旧密码
+                  <input v-model="passwordForm.oldPassword" type="password" placeholder="请输入旧密码" />
+                </label>
+                <label>
+                  新密码
+                  <input v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" />
+                </label>
+                <label>
+                  确认新密码
+                  <input v-model="passwordForm.confirm" type="password" placeholder="请再一次输入新密码" />
+                </label>
+                <div class="row-inline" style="justify-content:flex-end; gap:10px;">
+                  <button class="primary" type="button" :disabled="passwordSubmitting" @click="changePassword">
+                    {{ passwordSubmitting ? '提交中...' : '保存密码' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="profile-card">
+              <div class="panel__header" style="margin-bottom:12px;">
+                <h3>收货地址</h3>
+                <div class="row-inline" style="gap:8px;">
+                  <button class="ghost" type="button" @click="loadAddresses">刷新</button>
+                  <button class="ghost" type="button" @click="openAddressModal()">新增</button>
+                </div>
+              </div>
+              <div v-if="!addressList.length" class="empty" style="margin:0;">
+                <p>还没有收货地址</p>
+                <small class="muted">可以使用定位或地图选点快速添加</small>
+              </div>
+              <div v-else class="address-grid">
+                <div v-for="addr in addressList" :key="addr.id" class="address-card">
+                  <div class="row-inline" style="justify-content: space-between; width:100%;">
+                    <div>
+                      <strong>{{ addr.recipientName }}</strong>
+                      <span class="muted" style="margin-left:8px;">{{ addr.phone }}</span>
+                    </div>
+                    <div class="row-inline" style="gap:6px;">
+                      <span v-if="addr.default" class="tag">默认</span>
+                      <button class="ghost" type="button" @click.stop="markDefaultAddress(addr.id)">设为默认</button>
+                      <button class="ghost" type="button" @click.stop="openAddressModal(addr)">编辑</button>
+                      <button class="ghost danger" type="button" @click.stop="removeAddress(addr.id)">删除</button>
+                    </div>
+                  </div>
+                  <p class="muted" style="margin-top:6px;">{{ addr.address }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
     </section>
 
-    <section v-else-if="currentPage === 'walletUser'" class="content content--full">
+    <section v-else-if="currentPage === 'walletUser' && auth.role !== 'USER'" class="content content--full">
       <div class="content__main">
         <div class="toolbar">
           <div>
             <p class="eyebrow">钱包</p>
-            <h2>余额 ¥{{ Number(walletBalance).toFixed(2) }}</h2>
+            <h2>余额 ￥{{ Number(walletBalance).toFixed(2) }}</h2>
           </div>
           <div class="row-inline">
             <button class="ghost" type="button" @click="loadWallet">刷新余额</button>
@@ -3360,7 +4066,7 @@ function bytesToHex(bytes) {
             <button class="ghost" type="button" @click="loadPaymentLogs">刷新</button>
           </div>
           <div v-if="paymentLogsLoading" class="loading">加载中...</div>
-          <div v-else-if="!paymentLogs.length" class="empty">暂无记录</div>
+          <div v-else-if="!visiblePaymentLogs.length" class="empty">暂无记录</div>
           <div v-else class="admin-table admin-table--orders">
             <div class="admin-table__head" style="grid-template-columns: 1fr 1fr 1fr 1.2fr;">
               <span>时间</span>
@@ -3369,15 +4075,15 @@ function bytesToHex(bytes) {
               <span>关联</span>
             </div>
             <div
-              v-for="p in paymentLogs"
+              v-for="p in visiblePaymentLogs"
               :key="p.id"
               class="admin-table__row"
               style="grid-template-columns: 1fr 1fr 1fr 1.2fr;"
             >
               <span>{{ formatDateTime(p.createdAt) }}</span>
               <span>{{ formatPaymentType(p.type) }}</span>
-              <span>¥{{ Number(p.amount || 0).toFixed(2) }}</span>
-              <span>{{ p.orderNumber || p.remark || '—' }}</span>
+              <span>￥{{ Number(p.amount || 0).toFixed(2) }}</span>
+              <span>{{ p.orderNumber || p.remark || '-' }}</span>
             </div>
           </div>
         </div>
@@ -3389,89 +4095,223 @@ function bytesToHex(bytes) {
         <div class="toolbar">
           <div>
             <p class="eyebrow">订单管理</p>
-            <h2>我的订单</h2>
+            <h2>{{ isBuyerOrderView ? '我的订单' : '店铺订单' }}</h2>
           </div>
           <button class="ghost" type="button" @click="loadMyOrders">刷新</button>
         </div>
+        <div v-if="notice.message" class="notice" :data-variant="notice.type">
+          {{ notice.message }}
+        </div>
         <div v-if="myOrdersLoading" class="loading">加载中...</div>
-        <div v-else-if="!myOrders.length" class="empty">暂无订单</div>
-        <div v-else class="admin-table admin-table--orders">
-          <div class="admin-table__head" style="grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr;">
-            <span>订单号</span>
-            <span>金额</span>
-            <span>状态</span>
-            <span>创建时间</span>
-            <span>操作</span>
+        <div v-else-if="!myOrders.length" class="empty">
+          <p>暂无订单</p>
+          <small class="muted">{{ isBuyerOrderView ? '浏览商品并完成下单后，订单会出现在这里。' : '店铺收到订单后，会在这里集中查看和处理。' }}</small>
+        </div>
+        <div v-else class="orders-shell">
+          <div class="orders-summary-grid">
+            <div class="orders-summary-card" data-variant="accent">
+              <small>订单总览</small>
+              <h3>{{ myOrderSummary.totalCount }}</h3>
+              <p class="muted">累计金额 ￥{{ myOrderSummary.totalAmount }}</p>
+            </div>
+            <div class="orders-summary-card">
+              <small>{{ myOrderSummary.pendingActionLabel }}</small>
+              <h3>{{ myOrderSummary.pendingActionCount }}</h3>
+              <p class="muted">{{ isBuyerOrderView ? '包含待支付、待确认收货' : '当前待处理的退款申请数量' }}</p>
+            </div>
+            <div class="orders-summary-card">
+              <small>托管中金额</small>
+              <h3>￥{{ myOrderSummary.escrowAmount }}</h3>
+              <p class="muted">平台暂存，确认收货后才会结算</p>
+            </div>
+            <div class="orders-summary-card">
+              <small>退款相关</small>
+              <h3>{{ myOrderSummary.refundCount }}</h3>
+              <p class="muted">含退款申请、已退款、已拒绝订单</p>
+            </div>
           </div>
-          <div
-            v-for="o in myOrders"
-            :key="o.orderId || o.id"
-            class="admin-table__row"
-            style="grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr;"
-          >
-            <span>{{ o.orderNumber }}</span>
-            <span>¥{{ Number(o.totalAmount || 0).toFixed(2) }}</span>
-            <span>{{ formatOrderStatusWithPayMethod(o.status, o.payMethod) }}</span>
-            <span>{{ formatDateTime(o.createdAt) }}</span>
-            <div class="admin-table__actions">
+
+          <div class="orders-toolbar">
+            <input
+              class="search order-search"
+              v-model="myOrderSearch"
+              type="search"
+              :placeholder="isBuyerOrderView ? '搜索订单号 / 商品 / 退款原因' : '搜索订单号 / 商品 / 买家退款原因'"
+            />
+            <div class="orders-filter-chips">
               <button
-                class="ghost danger"
+                v-for="tab in myOrderStatusTabs"
+                :key="tab.key"
+                :class="['chip', myOrderStatusFilter === tab.key && 'chip--active']"
                 type="button"
-                :disabled="!canRefund(o.status)"
-                :style="!canRefund(o.status) ? 'pointer-events:none;opacity:0.5;' : ''"
-                @click="openRefundModal(o)"
+                @click="myOrderStatusFilter = tab.key"
               >
-                申请退款
+                {{ tab.label }} · {{ tab.count }}
               </button>
             </div>
           </div>
-        </div>
-      </div>
-    </section>
 
-    <section v-else-if="currentPage === 'ai'" class="content content--full">
-      <div class="content__main">
-        <div class="toolbar">
-          <div>
-            <p class="eyebrow">AI帮你选</p>
-            <h2>智能搭配与推荐</h2>
+          <div v-if="!filteredMyOrders.length" class="empty">
+            <p>没有匹配的订单</p>
+            <small class="muted">可以切换筛选条件，或清空搜索词后重试。</small>
           </div>
-          <button class="ghost" type="button" @click="clearAiChat">清空</button>
-        </div>
-        <div class="ai-panel">
-          <div class="ai-chat">
-            <div v-if="!aiMessages.length" class="empty">输入需求后，AI 将在这里回复</div>
-            <div v-for="(msg, idx) in aiMessages" :key="idx" :class="['ai-msg', msg.role === 'assistant' ? 'ai-msg--assistant' : 'ai-msg--user']">
-              <div class="ai-msg__avatar">{{ msg.role === 'assistant' ? 'AI' : '我' }}</div>
-              <div class="ai-msg__bubble">
-                <pre>{{ msg.content }}</pre>
-              </div>
-            </div>
-            <div v-if="aiLoading" class="ai-msg ai-msg--assistant">
-              <div class="ai-msg__avatar">AI</div>
-              <div class="ai-msg__bubble dots">
-                <span></span><span></span><span></span>
-              </div>
-            </div>
-            <div v-if="aiError" class="inline-notice" data-variant="error">{{ aiError }}</div>
-          </div>
-          <div class="ai-side">
-            <div v-if="aiSuggestions.length" class="ai-suggestions">
-              <div v-for="prod in aiSuggestions" :key="prod.id" class="ai-suggestion-card">
+
+          <div v-else class="order-card-list">
+            <article v-for="o in pagedMyOrders" :key="o.orderId || o.id" class="order-card">
+              <div class="order-card__top">
                 <div>
-                  <strong>{{ prod.name }}</strong>
-                  <p class="muted">￥{{ Number(prod.price || 0).toFixed(2) }}</p>
+                  <p class="eyebrow">订单号</p>
+                  <h3 class="order-card__number">{{ o.orderNumber }}</h3>
+                  <p class="muted">{{ formatDateTime(o.createdAt) }}</p>
                 </div>
-                <button class="ghost" type="button" @click="addProductFromAi(prod.id)">一键加入购物车</button>
+                <div class="order-card__top-meta">
+                  <span class="status-badge" :data-variant="getOrderStatusVariant(o.status)">
+                    {{ formatOrderStatusWithPayMethod(o.status, o.payMethod) }}
+                  </span>
+                  <strong class="order-card__amount">￥{{ Number(o.totalAmount || 0).toFixed(2) }}</strong>
+                </div>
               </div>
-            </div>
-            <div v-else class="empty">AI 推荐的商品会显示在这里</div>
+
+              <div class="order-progress">
+                <div class="order-progress__track">
+                  <span
+                    class="order-progress__fill"
+                    :data-variant="getOrderStatusVariant(o.status)"
+                    :style="{ width: `${getOrderProgressMeta(o.status).percent}%` }"
+                  ></span>
+                </div>
+                <div class="order-progress__meta">
+                  <strong>{{ getOrderProgressMeta(o.status).label }}</strong>
+                  <span class="muted">{{ getOrderProgressMeta(o.status).desc }}</span>
+                </div>
+              </div>
+
+              <div class="order-card__body">
+                <div class="order-card__section">
+                  <small class="muted">商品清单</small>
+                  <div v-if="o.items?.length" class="order-item-tags">
+                    <span v-for="(item, idx) in o.items.slice(0, 4)" :key="`${o.orderId || o.id}-${idx}`" class="tag tag--soft">
+                      {{ item.productName || '商品' }} ×{{ Number(item.quantity || 0) }}<template v-if="item.sizeLabel"> / {{ item.sizeLabel }}</template>
+                    </span>
+                    <span v-if="o.items.length > 4" class="tag tag--soft">+{{ o.items.length - 4 }} 件</span>
+                  </div>
+                  <p v-else class="muted">暂无商品明细</p>
+                  <p class="muted">共 {{ countOrderItems(o) }} 件商品</p>
+                </div>
+
+                <div class="order-card__section">
+                  <small class="muted">支付与流程</small>
+                  <strong>{{ formatPayMethodShort(o.payMethod) }}</strong>
+                  <p class="muted">
+                    {{
+                      isBuyerOrderView
+                        ? (canConfirmReceipt(o.status)
+                          ? '订单已支付，平台正在托管资金。你可以确认收货，也可以直接发起售后退款。'
+                          : canReviewMerchant(o)
+                            ? '订单已完成，现在可以给商家打分并填写评价；如需售后仍可继续发起退款。'
+                            : hasMerchantReview(o)
+                              ? '订单已完成，你提交的商家评价已保存；如需售后仍可继续发起退款。'
+                          : canRefund(o.status)
+                            ? '如需售后，可直接发起退款申请并等待商家审核。'
+                            : getOrderProgressMeta(o.status).desc)
+                        : (canReviewRefund(o.status)
+                          ? '当前有退款申请待你审核，系统会在通过后自动退款。'
+                          : '商家端可在这里持续跟进订单处理和售后状态。')
+                    }}
+                  </p>
+                </div>
+
+                <div
+                  v-if="o.refundReason"
+                  class="order-card__section order-card__section--notice"
+                  :data-variant="normalizeOrderStatus(o.status) === 'REFUND_REQUESTED' ? 'warning' : 'neutral'"
+                >
+                  <small class="muted">{{ isBuyerOrderView ? '退款说明' : '买家退款原因' }}</small>
+                  <p>{{ o.refundReason }}</p>
+                </div>
+
+                <div v-if="hasMerchantReview(o)" class="order-card__section order-card__section--review">
+                  <div class="order-review__header">
+                    <small class="muted">{{ isBuyerOrderView ? '我的商家评价' : `${o.buyerName || '买家'} 的评价` }}</small>
+                    <strong class="order-review__stars">{{ renderMerchantRating(o.merchantRating) }}</strong>
+                  </div>
+                  <p>{{ o.merchantReview || '已提交评分' }}</p>
+                  <span v-if="o.merchantReviewedAt" class="muted">{{ formatDateTime(o.merchantReviewedAt) }}</span>
+                </div>
+              </div>
+
+              <div class="admin-table__actions order-card__actions">
+                <button
+                  v-if="canPayPending(o)"
+                  class="ghost"
+                  type="button"
+                  :disabled="repayOrderId === (o.orderId || o.id)"
+                  @click="payPendingOrder(o)"
+                >
+                  {{ repayOrderId === (o.orderId || o.id) ? '跳转中...' : '继续支付' }}
+                </button>
+                <button
+                  v-if="isBuyerOrderView && canConfirmReceipt(o.status)"
+                  class="primary"
+                  type="button"
+                  :disabled="receiptSubmitting"
+                  @click="confirmReceipt(o)"
+                >
+                  {{ receiptSubmitting ? '处理中...' : '确认收货' }}
+                </button>
+                <button
+                  v-if="isBuyerOrderView && canReviewMerchant(o)"
+                  class="primary"
+                  type="button"
+                  :disabled="reviewSubmitting && reviewModal.orderId === (o.orderId || o.id)"
+                  @click="openReviewModal(o)"
+                >
+                  {{ reviewSubmitting && reviewModal.orderId === (o.orderId || o.id) ? '提交中...' : '评价商家' }}
+                </button>
+                <button
+                  v-if="isBuyerOrderView"
+                  class="ghost danger"
+                  type="button"
+                  :disabled="!canRefund(o.status)"
+                  :style="!canRefund(o.status) ? 'pointer-events:none;opacity:0.5;' : ''"
+                  @click="openRefundModal(o)"
+                >
+                  申请退款
+                </button>
+                <button
+                  v-if="canOpenRefundChat(o)"
+                  class="ghost"
+                  type="button"
+                  @click="openRefundChat(o)"
+                >
+                  {{ getRefundChatLabel(o) }}
+                </button>
+                <button
+                  v-if="!isBuyerOrderView && canReviewRefund(o.status)"
+                  class="primary"
+                  type="button"
+                  :disabled="refundReviewSubmitting"
+                  @click="reviewRefundByMerchant(o, true)"
+                >
+                  {{ refundReviewSubmitting ? '处理中...' : '同意退款' }}
+                </button>
+                <button
+                  v-if="!isBuyerOrderView && canReviewRefund(o.status)"
+                  class="ghost danger"
+                  type="button"
+                  :disabled="refundReviewSubmitting"
+                  @click="reviewRefundByMerchant(o, false)"
+                >
+                  驳回退款
+                </button>
+              </div>
+            </article>
           </div>
-          <div class="ai-input">
-            <textarea v-model="aiInput" rows="2" placeholder="例如：我想要通勤用的衬衫和长裤，预算 500 元以内，偏简约风"></textarea>
-            <button class="primary" type="button" :disabled="aiLoading" @click="doAiRecommend">
-              {{ aiLoading ? '生成中...' : '发送' }}
-            </button>
+
+          <div v-if="filteredMyOrders.length" class="pager">
+            <button class="ghost" type="button" :disabled="myOrderPage === 1" @click="changeMyOrderPage(-1)">上一页</button>
+            <span class="muted">第 {{ myOrderPage }} / {{ myOrderTotalPages }} 页</span>
+            <button class="ghost" type="button" :disabled="myOrderPage === myOrderTotalPages" @click="changeMyOrderPage(1)">下一页</button>
           </div>
         </div>
       </div>
@@ -3512,13 +4352,12 @@ function bytesToHex(bytes) {
     <div v-if="showRechargeModal" class="modal-backdrop" @click.self="showRechargeModal = false">
       <div class="modal">
         <div class="modal__header">
-          <h3>充值钱包</h3>
+          <h3>充值余额</h3>
           <button class="ghost" @click="showRechargeModal = false">×</button>
         </div>
         <div class="auth-form">
           <label>
-            金额（元）
-            <input v-model="rechargeAmount" type="number" min="0.01" step="0.01" />
+            金额（元）            <input v-model="rechargeAmount" type="number" min="0.01" step="0.01" />
           </label>
           <button class="primary" type="button" @click="doRecharge">充值</button>
         </div>
@@ -3531,54 +4370,109 @@ function bytesToHex(bytes) {
           <h3>确认支付</h3>
           <button class="ghost" @click="showPayModal = false">×</button>
         </div>
-        <div class="auth-form">
-          <label>
-            选择地址
-            <div class="address-list">
-              <label v-for="addr in addressList" :key="addr.id" class="address-card" style="cursor:pointer;">
-                <input
-                  type="radio"
-                  name="pay_addr"
-                  :value="addr.id"
-                  :checked="payModalAddressId === addr.id"
-                  @change="payModalAddressId = addr.id; chooseAddress(addr.id)"
-                />
-                <div class="address-body">
-                  <div class="row-inline" style="justify-content: space-between; width:100%;">
-                    <div>
-                      <strong>{{ addr.recipientName }}</strong>
-                      <span class="muted" style="margin-left:8px;">{{ addr.phone }}</span>
+        <div class="pay-layout">
+          <div class="auth-form pay-layout__main">
+            <label>
+              选择地址
+              <div class="address-list">
+                <label
+                  v-for="addr in addressList"
+                  :key="addr.id"
+                  :class="['address-card', 'address-card--selectable', payModalAddressId === addr.id && 'address-card--active']"
+                >
+                  <input
+                    type="radio"
+                    name="pay_addr"
+                    :value="addr.id"
+                    :checked="payModalAddressId === addr.id"
+                    @change="payModalAddressId = addr.id; chooseAddress(addr.id)"
+                  />
+                  <div class="address-body">
+                    <div class="row-inline" style="justify-content: space-between; width:100%;">
+                      <div>
+                        <strong>{{ addr.recipientName }}</strong>
+                        <span class="muted" style="margin-left:8px;">{{ addr.phone }}</span>
+                      </div>
+                      <span v-if="addr.default" class="tag">默认</span>
                     </div>
-                    <span v-if="addr.default" class="tag">默认</span>
+                    <p class="muted">{{ addr.address }}</p>
                   </div>
-                  <p class="muted">{{ addr.address }}</p>
-                </div>
-              </label>
-            </div>
-          </label>
-          <label>
-            支付方式
-            <div class="row-inline" style="gap:10px;">
-              <label class="row-inline" style="gap:6px;">
-                <input type="radio" value="ALIPAY" v-model="payModalPayMethod" />
-                支付宝
-              </label>
-              <label class="row-inline" style="gap:6px;">
-                <input type="radio" value="WALLET" v-model="payModalPayMethod" />
-                金币（站内钱包）
-              </label>
-            </div>
-          </label>
-          <div class="summary">
-            <span>合计</span>
-            <strong>￥{{ cartTotal }}</strong>
+                </label>
+              </div>
+            </label>
+            <label>
+              支付方式
+              <div class="pay-method-grid">
+                <label class="pay-method-card pay-method-card--active">
+                  <input type="radio" value="ALIPAY" :checked="true" disabled />
+                  <div>
+                    <strong>支付宝沙箱支付</strong>
+                    <p class="muted">当前站点下单仅保留支付宝沙箱支付，支持一次拉起合并支付</p>
+                  </div>
+                </label>
+              </div>
+              <p class="muted pay-method-desc">{{ selectedPayMethodMeta.desc }}</p>
+            </label>
           </div>
-          <div class="row-inline" style="justify-content:flex-end; gap:10px;">
+          <aside class="pay-summary-card">
+            <p class="eyebrow">支付预览</p>
+            <h4>{{ cartMerchantCount }} 家商家 · {{ cartCount }} 件商品</h4>
+            <div class="pay-summary-card__metrics">
+              <div>
+                <span class="muted">支付方式</span>
+                <strong>{{ selectedPayMethodMeta.label }}</strong>
+              </div>
+              <div>
+                <span class="muted">实付金额</span>
+                <strong>￥{{ cartTotal }}</strong>
+              </div>
+            </div>
+            <div class="merchant-group-list merchant-group-list--compact">
+              <div v-for="group in cartMerchantGroups" :key="group.ownerId" class="merchant-group-card merchant-group-card--compact">
+                <div class="row-inline" style="justify-content:space-between;">
+                  <strong>{{ group.ownerName }}</strong>
+                  <span class="muted">{{ group.count }} 件</span>
+                </div>
+                <p class="muted">{{ group.previewText }}</p>
+                <strong>￥{{ group.subtotalText }}</strong>
+              </div>
+            </div>
+            <div v-if="selectedPayAddress" class="checkout-address-preview checkout-address-preview--tight">
+              <span class="tag">送达地址</span>
+              <div>
+                <strong>{{ selectedPayAddress.recipientName }} {{ selectedPayAddress.phone }}</strong>
+                <p class="muted">{{ selectedPayAddress.address }}</p>
+              </div>
+            </div>
+            <div class="summary">
+              <span>合计</span>
+              <strong>￥{{ cartTotal }}</strong>
+            </div>
+          </aside>
+          <div class="row-inline pay-footer-actions" style="justify-content:flex-end; gap:10px;">
             <button class="ghost" type="button" @click="showPayModal = false">取消</button>
             <button class="primary" type="button" :disabled="submitting || !payModalAddressId" @click="checkout">
               {{ submitting ? '提交中...' : '确认支付' }}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="actionDialog.visible" class="modal-backdrop" @click.self="closeActionDialog(false)">
+      <div class="modal action-dialog" :data-variant="actionDialog.variant">
+        <div class="modal__header modal__header--stack">
+          <p class="eyebrow">系统提示</p>
+          <h3>{{ actionDialog.title }}</h3>
+        </div>
+        <p class="action-dialog__message">{{ actionDialog.message }}</p>
+        <div class="row-inline action-dialog__actions">
+          <button v-if="actionDialog.showCancel" class="ghost" type="button" @click="closeActionDialog(false)">
+            {{ actionDialog.cancelText }}
+          </button>
+          <button class="primary" type="button" @click="closeActionDialog(true)">
+            {{ actionDialog.confirmText }}
+          </button>
         </div>
       </div>
     </div>
@@ -3592,12 +4486,10 @@ function bytesToHex(bytes) {
         <div class="auth-form">
           <div class="two-col">
             <label>
-              收货人
-              <input v-model="addressForm.recipientName" type="text" placeholder="姓名" />
+              收货人              <input v-model="addressForm.recipientName" type="text" placeholder="姓名" />
             </label>
             <label>
-              手机号
-              <input v-model="addressForm.phone" type="text" placeholder="手机号" />
+              手机号              <input v-model="addressForm.phone" type="text" placeholder="手机号" />
             </label>
           </div>
           <label>
@@ -3656,8 +4548,7 @@ function bytesToHex(bytes) {
         </div>
         <div class="auth-form">
           <label>
-            退款理由
-            <textarea v-model="refundModal.reason" placeholder="请输入退款原因"></textarea>
+            退款理由            <textarea v-model="refundModal.reason" placeholder="请输入退款原因"></textarea>
           </label>
           <div v-if="refundError" class="inline-notice" data-variant="error">{{ refundError }}</div>
           <div class="row-inline" style="justify-content:flex-end; gap:10px;">
@@ -3670,11 +4561,58 @@ function bytesToHex(bytes) {
       </div>
     </div>
 
+    <div v-if="showReviewModal" class="modal-backdrop" @click.self="closeReviewModal">
+      <div class="modal">
+        <div class="modal__header">
+          <h3>评价商家</h3>
+          <button class="ghost" @click="closeReviewModal">×</button>
+        </div>
+        <div class="auth-form">
+          <div class="auth-block">
+            <small class="muted">订单 {{ reviewModal.orderNumber || '-' }}</small>
+            <strong>{{ reviewModal.merchantName || '当前商家' }}</strong>
+          </div>
+          <label>
+            评分
+            <div class="review-rating-input">
+              <button
+                v-for="score in 5"
+                :key="score"
+                class="ghost"
+                type="button"
+                :class="{ 'review-rating-input__item--active': score === reviewModal.rating }"
+                @click="reviewModal.rating = score"
+              >
+                <span>{{ score <= reviewModal.rating ? '★' : '☆' }}</span>
+                <small>{{ score }} 星</small>
+              </button>
+            </div>
+          </label>
+          <label>
+            评价内容
+            <textarea
+              v-model="reviewModal.content"
+              maxlength="160"
+              placeholder="说说商家的发货、服务和商品情况"
+            ></textarea>
+          </label>
+          <div class="review-char-count">{{ reviewModal.content.trim().length }}/160</div>
+          <div v-if="reviewError" class="inline-notice" data-variant="error">{{ reviewError }}</div>
+          <div class="row-inline" style="justify-content:flex-end; gap:10px;">
+            <button class="ghost" type="button" @click="closeReviewModal">取消</button>
+            <button class="primary" type="button" :disabled="reviewSubmitting" @click="submitMerchantReview">
+              {{ reviewSubmitting ? '提交中...' : '提交评价' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showLoginModal" class="modal-backdrop" @click.self="closeLoginModal">
       <div class="modal">
         <div class="modal__header">
           <h3>登录账号</h3>
-          <button class="ghost" @click="closeLoginModal">✕</button>
+          <button class="ghost" @click="closeLoginModal">×</button>
         </div>
         <div v-if="loginNotice" class="inline-notice" data-variant="error">
           {{ loginNotice }}
@@ -3689,8 +4627,7 @@ function bytesToHex(bytes) {
             <input v-model="loginForm.password" type="password" placeholder="user123" />
           </label>
           <label>
-            图片验证码
-            <div class="captcha-row">
+            图片验证码            <div class="captcha-row">
               <input
                 v-model="loginForm.captchaCode"
                 type="text"
@@ -3709,8 +4646,7 @@ function bytesToHex(bytes) {
           </label>
           <button class="primary block" type="submit">登录</button>
           <p class="muted" style="text-align:center;">
-            没有账户？
-            <button class="ghost" type="button" @click="openRegisterModal">前往注册</button>
+            没有账号？            <button class="ghost" type="button" @click="openRegisterModal">前往注册</button>
           </p>
         </form>
       </div>
@@ -3738,12 +4674,15 @@ function bytesToHex(bytes) {
     <div v-if="showChatPanel" class="chat-panel">
       <div class="chat-panel__header">
         <div>
-          <strong>{{ currentChat.productName }}</strong>
-          <p class="muted">与 {{ currentChat.targetName }} 沟通</p>
+          <strong>{{ currentChat.title }}</strong>
+          <p class="muted">{{ currentChat.subtitle || `与 ${currentChat.targetName} 沟通` }}</p>
         </div>
         <button class="ghost" @click="showChatPanel = false">×</button>
       </div>
       <div class="chat-panel__body">
+        <div v-if="!currentChat.messages.length" class="empty">
+          {{ currentChat.mode === 'refund' ? '暂无售后消息，先和对方确认退款细节。' : '暂无聊天记录' }}
+        </div>
         <div v-for="msg in currentChat.messages" :key="msg.id" class="chat-msg">
           <div class="chat-msg__meta">
             <span>{{ msg.sender?.username || '用户' }}</span>
@@ -3759,8 +4698,8 @@ function bytesToHex(bytes) {
     </div>
 
     <Teleport to="body">
-      <div class="toast" v-if="aiToast.visible" :data-variant="aiToast.type">
-        {{ aiToast.message }}
+      <div class="toast" v-if="toastState.visible" :data-variant="toastState.type">
+        {{ toastState.message }}
       </div>
     </Teleport>
 
@@ -3769,48 +4708,18 @@ function bytesToHex(bytes) {
         <button class="ghost detail-close" @click="closeProductDetail">×</button>
         <div class="detail-main">
           <div class="detail-media">
-            <template v-if="detailProduct.videoUrl && !detailShowAi">
+            <template v-if="detailProduct.videoUrl">
               <video :src="formatImg(detailProduct.videoUrl)" controls playsinline preload="metadata"></video>
             </template>
             <template v-else>
-              <div class="detail-fallback">
-                <div
-                  class="detail-fallback__bg"
-                  :style="{ backgroundImage: `url(${formatImg(detailProduct.imageUrl)})` }"
-                ></div>
-                <div class="detail-fallback__layer">
-                  <div class="detail-fallback__chip">AI 导购</div>
-                  <h2>{{ detailProduct.name }}</h2>
-                  <p class="muted">￥{{ Number(detailProduct.price || 0).toFixed(2) }}</p>
-                  <div v-if="detailProduct.sizesDetail?.length" class="size-chips">
-                    <button
-                      v-for="sz in detailProduct.sizesDetail"
-                      :key="sz.label"
-                      class="ghost"
-                      :class="selectedSizes[detailProduct.id] === sz.label && 'chip--active'"
-                      type="button"
-                      @click.stop="selectSize(detailProduct.id, sz.label)"
-                    >
-                      {{ sz.label }} · {{ sz.stock }}
-                    </button>
-                  </div>
-                  <p v-if="detailAiLoading">正在生成 AI 介绍...</p>
-                  <p v-else class="detail-fallback__intro">
-                    {{ detailIntro || '暂无介绍，稍后再试' }}
-                  </p>
-                  <div class="row-inline" style="gap:10px; flex-wrap:wrap;">
-                    <button class="primary" type="button" @click="addToCart(detailProduct, selectedSizes[detailProduct.id])">加入购物车</button>
-                    <button class="ghost" type="button" @click="openChat(detailProduct)">咨询</button>
-                    <button class="ghost" type="button" @click="refreshAiIntro" :disabled="detailAiLoading">刷新AI介绍</button>
-                  </div>
-                </div>
-              </div>
+              <img :src="formatImg(detailProduct.imageUrl)" :alt="detailProduct.name" />
             </template>
           </div>
           <div class="detail-side">
             <h2>{{ detailProduct.name }}</h2>
             <p class="muted">￥{{ Number(detailProduct.price || 0).toFixed(2) }}</p>
             <p class="muted">分类：{{ detailProduct.category?.name || '未分类' }}</p>
+            <p class="muted">店铺：{{ resolveStoreName(detailProduct) }}</p>
             <div v-if="detailProduct.sizesDetail?.length" class="size-chips">
               <button
                 v-for="sz in detailProduct.sizesDetail"
@@ -3820,7 +4729,7 @@ function bytesToHex(bytes) {
                 type="button"
                 @click="selectSize(detailProduct.id, sz.label)"
               >
-                {{ sz.label }} · 库存{{ sz.stock }}
+                {{ sz.label }} / 库存{{ sz.stock }}
               </button>
             </div>
             <p class="muted" v-else>库存：{{ detailProduct.stock }}</p>
@@ -3828,33 +4737,42 @@ function bytesToHex(bytes) {
             <div class="row-inline" style="gap:8px;">
               <button class="primary" type="button" @click="addToCart(detailProduct, selectedSizes[detailProduct.id])">加入购物车</button>
               <button class="ghost" type="button" @click="openChat(detailProduct)">咨询</button>
-              <button
-                class="ghost"
-                type="button"
-                @click="detailShowAi = true"
-                v-if="detailProduct.videoUrl"
-              >
-                查看AI介绍
-              </button>
-              <button
-                class="ghost"
-                type="button"
-                @click="detailShowAi = false"
-                v-if="detailProduct.videoUrl && detailShowAi"
-              >
-                返回视频
-              </button>
-              <button
-                class="ghost"
-                type="button"
-                @click="refreshAiIntro"
-                :disabled="detailAiLoading"
-              >
-                刷新AI介绍
-              </button>
+            </div>
+            <div class="detail-merchant-card">
+              <div class="detail-merchant-card__header">
+                <div>
+                  <small class="muted">商家评分</small>
+                  <strong>{{ renderAverageRating(detailProduct.merchantRatingAverage) }} / 5</strong>
+                </div>
+                <div class="detail-merchant-score">
+                  <span class="detail-merchant-score__stars">{{ renderAverageRatingStars(detailProduct.merchantRatingAverage) }}</span>
+                  <small class="muted">{{ Number(detailProduct.merchantRatingCount || 0) }} 条店铺评价</small>
+                </div>
+              </div>
+              <div class="detail-merchant-meta">
+                <span class="tag tag--soft">商品销量 {{ Number(detailProduct.salesCount || 0) }}</span>
+                <span class="tag tag--soft">商品所属店铺 {{ resolveStoreName(detailProduct) }}</span>
+              </div>
+              <div v-if="detailLoading" class="loading loading--compact">正在加载商家评价...</div>
+              <div v-else class="detail-merchant-reviews">
+                <div v-if="!detailProduct.merchantReviews?.length" class="empty">该店铺暂无买家评价</div>
+                <div
+                  v-else
+                  v-for="review in detailProduct.merchantReviews"
+                  :key="`${review.orderNumber || 'review'}-${review.createdAt || ''}`"
+                  class="comment-item"
+                >
+                  <div class="comment-meta">
+                    <strong>{{ review.buyerUsername || '买家' }}</strong>
+                    <span class="tag tag--soft">{{ renderMerchantRating(review.rating) }}</span>
+                    <small class="muted">{{ formatDateTime(review.createdAt) }}</small>
+                  </div>
+                  <div class="comment-body">{{ review.content || '已提交评分，暂未填写文字评价' }}</div>
+                </div>
+              </div>
             </div>
             <div class="divider"></div>
-            <h3>评论区</h3>
+            <h3>商品评论</h3>
             <div class="detail-comments">
               <div v-if="!detailComments.length" class="empty">暂无评论</div>
               <div v-else v-for="c in detailComments" :key="c.id" class="comment-item">
@@ -3880,7 +4798,7 @@ function bytesToHex(bytes) {
       <div class="modal">
         <div class="modal__header">
           <h3>注册账号</h3>
-          <button class="ghost" @click="closeRegisterModal">✕</button>
+          <button class="ghost" @click="closeRegisterModal">×</button>
         </div>
         <div v-if="registerNotice" class="inline-notice" data-variant="error">
           {{ registerNotice }}
@@ -3892,7 +4810,7 @@ function bytesToHex(bytes) {
           </label>
           <label>
             密码
-            <input v-model="registerForm.password" type="password" placeholder="设置登录密码" />
+            <input v-model="registerForm.password" type="password" placeholder="请设置登录密码" />
           </label>
           <label>
             邮箱
@@ -3916,14 +4834,27 @@ function bytesToHex(bytes) {
             角色
             <select v-model="registerForm.role">
               <option value="USER">普通用户</option>
-              <option value="MERCHANT">商家（需审核后上架）</option>
+              <option value="MERCHANT">商家（完善资料并审核后上架）</option>
             </select>
           </label>
           <button class="primary block" type="submit">注册并登录</button>
-          <small class="muted">商家注册后状态默认为「待审核」，审核通过后可上架商品。</small>
+          <small class="muted">商家注册后先补充基本资料，再提交管理员审核；审核通过后才可使用完整功能。</small>
         </form>
       </div>
     </div>
+
+    <button
+      v-if="cart.length && currentPage !== 'checkout'"
+      class="floating-cart"
+      type="button"
+      @click="go('checkout')"
+    >
+      <span class="floating-cart__count">{{ cartCount }}</span>
+      <div class="floating-cart__meta">
+        <strong>去结算</strong>
+        <p>{{ cartMerchantCount > 1 ? `${cartMerchantCount} 家商家 · ￥${cartTotal}` : `￥${cartTotal}` }}</p>
+      </div>
+    </button>
   </div>
 </template>
 
@@ -4476,6 +5407,188 @@ h1 {
   color: var(--muted);
 }
 
+.orders-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.orders-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.orders-summary-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.orders-summary-card[data-variant='accent'] {
+  background: linear-gradient(135deg, rgba(16, 163, 127, 0.14), rgba(16, 163, 127, 0.04));
+  border-color: rgba(16, 163, 127, 0.28);
+}
+
+.orders-summary-card h3 {
+  margin: 6px 0 4px;
+}
+
+.orders-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.orders-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.order-search {
+  max-width: 380px;
+}
+
+.order-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.order-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.order-card__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.order-card__top-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.order-card__number {
+  margin: 6px 0 4px;
+  font-size: 18px;
+}
+
+.order-card__amount {
+  font-size: 20px;
+  color: var(--accent);
+}
+
+.order-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.order-progress__track {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.order-progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(120deg, #10a37f, #0b8a6d);
+  transition: width 180ms ease;
+}
+
+.order-progress__fill[data-variant='PENDING_PAYMENT'],
+.order-progress__fill[data-variant='REFUND_REQUESTED'] {
+  background: linear-gradient(120deg, #f59e0b, #d97706);
+}
+
+.order-progress__fill[data-variant='REFUNDED'],
+.order-progress__fill[data-variant='REJECTED'] {
+  background: linear-gradient(120deg, #64748b, #475569);
+}
+
+.order-progress__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.order-card__body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.order-card__section {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--panel-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.order-card__section p {
+  margin: 0;
+}
+
+.order-card__section--notice[data-variant='warning'] {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.order-card__section--notice[data-variant='neutral'] {
+  border-color: rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.order-card__section--review {
+  border-color: rgba(16, 163, 127, 0.2);
+  background: linear-gradient(180deg, rgba(16, 163, 127, 0.08), rgba(255, 255, 255, 0.96));
+}
+
+.order-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.order-card__actions {
+  padding-top: 2px;
+}
+
+.order-review__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.order-review__stars {
+  color: #f59e0b;
+  letter-spacing: 1px;
+}
+
 .admin-panels {
   display: grid;
   grid-template-columns: 1.3fr 1fr;
@@ -4557,6 +5670,37 @@ h1 {
   color: #0f5132;
 }
 
+.status-badge[data-variant='ACTIVE'] {
+  border-color: #10a37f;
+  background: rgba(16, 163, 127, 0.1);
+  color: #0f5132;
+}
+
+.status-badge[data-variant='PENDING_PAYMENT'] {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  color: #92400e;
+}
+
+.status-badge[data-variant='PLACED'] {
+  border-color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.1);
+  color: #075985;
+}
+
+.status-badge[data-variant='REFUND_REQUESTED'] {
+  border-color: #f97316;
+  background: rgba(249, 115, 22, 0.1);
+  color: #9a3412;
+}
+
+.status-badge[data-variant='REFUNDED'],
+.status-badge[data-variant='REJECTED'] {
+  border-color: #64748b;
+  background: rgba(100, 116, 139, 0.12);
+  color: #334155;
+}
+
 .status-badge[data-variant='PENDING'],
 .status-badge[data-variant='UNREVIEWED'] {
   border-color: #f59e0b;
@@ -4568,6 +5712,12 @@ h1 {
   border-color: #ef4444;
   background: rgba(239, 68, 68, 0.12);
   color: #991b1b;
+}
+
+.status-badge[data-variant='DELETED'] {
+  border-color: #64748b;
+  background: rgba(100, 116, 139, 0.12);
+  color: #334155;
 }
 
 .status-badge[data-variant='NONE'],
@@ -4682,6 +5832,53 @@ h1 {
   color: #0f5132;
 }
 
+.cart-merchant-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cart-merchant-overview__metric {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(16, 163, 127, 0.08), rgba(16, 163, 127, 0.02));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cart-merchant-overview__metric strong {
+  font-size: 18px;
+}
+
+.merchant-group-list {
+  display: grid;
+  gap: 10px;
+}
+
+.merchant-group-list--compact {
+  gap: 8px;
+}
+
+.merchant-group-card {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #fff;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.merchant-group-card--compact {
+  padding: 10px 12px;
+  border-radius: 12px;
+  box-shadow: none;
+  background: var(--panel-muted);
+}
+
 .content {
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(360px, 1fr);
@@ -4712,6 +5909,24 @@ h1 {
   align-items: flex-end;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.catalog-toolbar-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.catalog-store-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: min(280px, 100%);
+}
+
+.catalog-store-filter select {
+  min-width: 240px;
 }
 
 .eyebrow {
@@ -4824,6 +6039,20 @@ h1 {
   gap: 8px;
 }
 
+.catalog-store-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.catalog-metrics {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .card__header {
   display: flex;
   align-items: baseline;
@@ -4876,6 +6105,11 @@ h1 {
   background: var(--panel-muted);
   color: var(--accent);
   font-size: 12px;
+}
+
+.tag--soft {
+  background: rgba(16, 163, 127, 0.08);
+  color: #0f5132;
 }
 
 .cart {
@@ -4948,6 +6182,41 @@ h1 {
   background: var(--border);
 }
 
+.checkout-insight {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(16, 163, 127, 0.08), rgba(255, 255, 255, 0.92));
+}
+
+.checkout-insight__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.checkout-insight__header h4 {
+  margin: 6px 0 0;
+}
+
+.checkout-address-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.checkout-address-preview--tight {
+  background: var(--panel-muted);
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -4991,6 +6260,130 @@ select {
   padding: 12px;
   border-radius: 12px;
   background: var(--panel-muted);
+}
+
+.address-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.address-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 12px;
+  box-shadow: var(--shadow);
+}
+
+.address-card--selectable {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.address-card--selectable:hover {
+  transform: translateY(-1px);
+}
+
+.address-card--selectable input {
+  margin-top: 2px;
+}
+
+.address-card--active {
+  border-color: #10a37f;
+  box-shadow: 0 14px 28px rgba(16, 163, 127, 0.12);
+  background: linear-gradient(180deg, rgba(16, 163, 127, 0.08), #fff);
+}
+
+.address-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.pay-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 360px);
+  gap: 16px;
+}
+
+.pay-layout__main {
+  min-width: 0;
+}
+
+.pay-summary-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(16, 163, 127, 0.08), rgba(255, 255, 255, 0.96));
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pay-summary-card h4 {
+  margin: 0;
+}
+
+.pay-summary-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pay-summary-card__metrics > div {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pay-method-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.pay-method-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #fff;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.pay-method-card:hover {
+  transform: translateY(-1px);
+}
+
+.pay-method-card--active {
+  border-color: #10a37f;
+  box-shadow: 0 14px 28px rgba(16, 163, 127, 0.12);
+  background: linear-gradient(180deg, rgba(16, 163, 127, 0.08), #fff);
+}
+
+.pay-method-card input {
+  margin-top: 3px;
+}
+
+.pay-method-desc {
+  margin-top: 2px;
+}
+
+.pay-footer-actions {
+  grid-column: 1 / -1;
 }
 
 .manager-card {
@@ -5075,50 +6468,6 @@ select {
   gap: 8px;
 }
 
-.ai-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.ai-chat {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-}
-
-.ai-msg__bubble pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ai-side {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ai-suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ai-input {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 10px;
-  width: 100%;
-  margin-top: 6px;
-}
-
-.ai-input textarea {
-  flex: 1;
-  min-height: 80px;
-}
-
 .chart-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -5166,6 +6515,38 @@ select {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.review-rating-input {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.review-rating-input__item--active {
+  border-color: #10a37f !important;
+  background: linear-gradient(180deg, rgba(16, 163, 127, 0.1), #fff) !important;
+  color: #0f5132;
+}
+
+.review-rating-input .ghost {
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+
+.review-rating-input .ghost span {
+  font-size: 20px;
+  color: #f59e0b;
+}
+
+.review-char-count {
+  align-self: flex-end;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .captcha-row {
@@ -5313,6 +6694,43 @@ select {
   margin-bottom: 10px;
 }
 
+.modal__header--stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.modal__header--stack h3 {
+  margin: 0;
+}
+
+.action-dialog {
+  width: min(520px, 100%);
+}
+
+.action-dialog[data-variant='warning'] {
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.action-dialog[data-variant='error'] {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.action-dialog[data-variant='success'] {
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.action-dialog__message {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.action-dialog__actions {
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .edit-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -5352,6 +6770,48 @@ select {
   gap: 8px;
 }
 
+.floating-cart {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 196px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #0f172a, #10a37f);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.28);
+  cursor: pointer;
+}
+
+.floating-cart__count {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.18);
+  font-weight: 700;
+}
+
+.floating-cart__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.floating-cart__meta p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 12px;
+}
+
 .chat-msg {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -5367,60 +6827,6 @@ select {
 
 .chat-panel__footer input {
   flex: 1;
-}
-
-.terminal-shell {
-  background: #0f172a;
-  color: #e5e7eb;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-}
-
-.terminal-box {
-  min-height: 220px;
-  padding: 10px;
-  white-space: pre-wrap;
-  overflow: auto;
-  background: transparent;
-}
-
-.terminal-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0 0;
-}
-
-.terminal-inputline {
-  flex: 1;
-  background: #0b1221;
-  color: #e5e7eb;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-
-.prompt {
-  color: #22c55e;
-  font-weight: 700;
-}
-
-.log-box {
-  max-height: none;
-  width: 100%;
-  min-height: 260px;
-  overflow: auto;
-  background: #0f172a;
-  color: #e5e7eb;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  white-space: pre-wrap;
 }
 
 .auth-status {
@@ -5464,6 +6870,13 @@ select {
   .grid {
     grid-template-columns: repeat(1, minmax(0, 1fr));
   }
+
+  .orders-toolbar,
+  .order-card__top,
+  .order-card__top-meta,
+  .order-progress__meta {
+    align-items: flex-start;
+  }
 }
 
 @media (max-width: 960px) {
@@ -5493,6 +6906,10 @@ select {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .pay-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -5514,6 +6931,30 @@ select {
     gap: 10px;
     align-items: flex-start;
   }
+
+  .cart-merchant-overview,
+  .pay-summary-card__metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .orders-summary-grid,
+  .order-card__body {
+    grid-template-columns: 1fr;
+  }
+
+  .checkout-insight__header,
+  .checkout-address-preview {
+    flex-direction: column;
+  }
+
+  .floating-cart {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    min-width: 0;
+    border-radius: 18px;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 900px) {
@@ -5525,3 +6966,8 @@ select {
   }
 }
 </style>
+
+
+
+
+

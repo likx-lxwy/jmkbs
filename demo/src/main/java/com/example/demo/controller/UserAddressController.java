@@ -1,55 +1,65 @@
 package com.example.demo.controller;
 
+import com.example.demo.mapper.UserAddressQueryMapper;
 import com.example.demo.model.User;
 import com.example.demo.model.UserAddress;
-import com.example.demo.repository.UserAddressRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/addresses")
 @CrossOrigin(origins = "*")
 public class UserAddressController {
 
-    private final UserAddressRepository userAddressRepository;
+    private final UserAddressQueryMapper userAddressQueryMapper;
 
-    public UserAddressController(UserAddressRepository userAddressRepository) {
-        this.userAddressRepository = userAddressRepository;
+    public UserAddressController(UserAddressQueryMapper userAddressQueryMapper) {
+        this.userAddressQueryMapper = userAddressQueryMapper;
     }
 
     @GetMapping
     public List<UserAddress> list(HttpServletRequest request) {
         User user = currentUser(request);
-        return userAddressRepository.findByUserIdOrderByIsDefaultDescCreatedAtDesc(user.getId());
+        return userAddressQueryMapper.findByUserIdOrderByIsDefaultDescCreatedAtDesc(user.getId());
     }
 
     @PostMapping
     public UserAddress create(@RequestBody UserAddress body, HttpServletRequest request) {
         User user = currentUser(request);
         validate(body);
-        UserAddress addr = new UserAddress();
-        addr.setUser(user);
-        addr.setRecipientName(body.getRecipientName());
-        addr.setPhone(body.getPhone());
-        addr.setAddress(body.getAddress());
-        addr.setDefault(body.isDefault());
-        if (addr.isDefault()) {
+        UserAddress address = new UserAddress();
+        address.setUser(user);
+        address.setRecipientName(body.getRecipientName());
+        address.setPhone(body.getPhone());
+        address.setAddress(body.getAddress());
+        address.setDefault(body.isDefault());
+        if (address.isDefault()) {
             clearDefault(user.getId());
         }
-        return userAddressRepository.save(addr);
+        userAddressQueryMapper.insert(address);
+        return address;
     }
 
     @PutMapping("/{id}")
     public UserAddress update(@PathVariable Long id, @RequestBody UserAddress body, HttpServletRequest request) {
         User user = currentUser(request);
         validate(body);
-        UserAddress exist = userAddressRepository.findByIdAndUserId(id, user.getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "地址不存在"));
+        UserAddress exist = userAddressQueryMapper.findByIdAndUserId(id, user.getId());
+        if (exist == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "地址不存在");
+        }
         exist.setRecipientName(body.getRecipientName());
         exist.setPhone(body.getPhone());
         exist.setAddress(body.getAddress());
@@ -59,42 +69,46 @@ public class UserAddressController {
             clearDefault(user.getId());
             exist.setDefault(true);
         }
-        return userAddressRepository.save(exist);
+        userAddressQueryMapper.update(exist);
+        return exist;
     }
 
     @PostMapping("/{id}/default")
     public void setDefault(@PathVariable Long id, HttpServletRequest request) {
         User user = currentUser(request);
-        UserAddress exist = userAddressRepository.findByIdAndUserId(id, user.getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "地址不存在"));
+        UserAddress exist = userAddressQueryMapper.findByIdAndUserId(id, user.getId());
+        if (exist == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "地址不存在");
+        }
         clearDefault(user.getId());
         exist.setDefault(true);
-        userAddressRepository.save(exist);
+        userAddressQueryMapper.update(exist);
     }
 
     @DeleteMapping("/{id}")
     public void delete(@PathVariable Long id, HttpServletRequest request) {
         User user = currentUser(request);
-        UserAddress exist = userAddressRepository.findByIdAndUserId(id, user.getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "地址不存在"));
-        userAddressRepository.delete(exist);
-        // 若删除了默认地址，置第一个为默认
+        UserAddress exist = userAddressQueryMapper.findByIdAndUserId(id, user.getId());
+        if (exist == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "地址不存在");
+        }
+        userAddressQueryMapper.deleteById(exist.getId());
         if (exist.isDefault()) {
-            List<UserAddress> rest = userAddressRepository.findByUserIdOrderByIsDefaultDescCreatedAtDesc(user.getId());
+            List<UserAddress> rest = userAddressQueryMapper.findByUserIdOrderByIsDefaultDescCreatedAtDesc(user.getId());
             if (!rest.isEmpty()) {
                 UserAddress first = rest.get(0);
                 first.setDefault(true);
-                userAddressRepository.save(first);
+                userAddressQueryMapper.update(first);
             }
         }
     }
 
     private void clearDefault(Long userId) {
-        List<UserAddress> list = userAddressRepository.findByUserIdOrderByIsDefaultDescCreatedAtDesc(userId);
-        for (UserAddress ua : list) {
-            if (ua.isDefault()) {
-                ua.setDefault(false);
-                userAddressRepository.save(ua);
+        List<UserAddress> list = userAddressQueryMapper.findByUserIdOrderByIsDefaultDescCreatedAtDesc(userId);
+        for (UserAddress address : list) {
+            if (address.isDefault()) {
+                address.setDefault(false);
+                userAddressQueryMapper.update(address);
             }
         }
     }

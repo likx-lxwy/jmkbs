@@ -1,10 +1,10 @@
 package com.example.demo.controller;
 
+import com.example.demo.mapper.CustomerOrderQueryMapper;
+import com.example.demo.mapper.PaymentLogQueryMapper;
 import com.example.demo.model.CustomerOrder;
 import com.example.demo.model.PaymentLog;
 import com.example.demo.model.User;
-import com.example.demo.repository.CustomerOrderRepository;
-import com.example.demo.repository.PaymentLogRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -22,12 +22,14 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class PaymentController {
 
-    private final PaymentLogRepository paymentLogRepository;
-    private final CustomerOrderRepository customerOrderRepository;
+    private static final String LOG_TYPE_REVIEW = "REVIEW";
 
-    public PaymentController(PaymentLogRepository paymentLogRepository, CustomerOrderRepository customerOrderRepository) {
-        this.paymentLogRepository = paymentLogRepository;
-        this.customerOrderRepository = customerOrderRepository;
+    private final PaymentLogQueryMapper paymentLogQueryMapper;
+    private final CustomerOrderQueryMapper customerOrderQueryMapper;
+
+    public PaymentController(PaymentLogQueryMapper paymentLogQueryMapper, CustomerOrderQueryMapper customerOrderQueryMapper) {
+        this.paymentLogQueryMapper = paymentLogQueryMapper;
+        this.customerOrderQueryMapper = customerOrderQueryMapper;
     }
 
     @GetMapping("/mine")
@@ -36,39 +38,39 @@ public class PaymentController {
         if (user == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未登录");
         }
-        List<Map<String, Object>> logs = paymentLogRepository.findByUserIdOrderByCreatedAtDesc(user.getId())
+        List<Map<String, Object>> logs = paymentLogQueryMapper.findByUserIdOrderByCreatedAtDesc(user.getId())
                 .stream()
+                .filter(log -> !LOG_TYPE_REVIEW.equalsIgnoreCase(log.getType()))
                 .map(this::toMap)
                 .toList();
         if (!logs.isEmpty()) {
             return logs;
         }
-        // 兜底：老数据没有流水时，用订单记录生成只读视图
-        return customerOrderRepository.findByBuyerIdOrderByCreatedAtDesc(user.getId())
+        return customerOrderQueryMapper.selectByBuyerIdOrderByCreatedAtDesc(user.getId())
                 .stream()
                 .map(this::fromOrder)
                 .toList();
     }
 
     private Map<String, Object> toMap(PaymentLog log) {
-        Map<String, Object> m = new HashMap<>();
-        m.put("id", log.getId());
-        m.put("orderNumber", log.getOrderNumber());
-        m.put("amount", log.getAmount());
-        m.put("type", log.getType());
-        m.put("remark", log.getRemark());
-        m.put("createdAt", log.getCreatedAt());
-        return m;
+        Map<String, Object> result = new HashMap<>();
+        result.put("id", log.getId());
+        result.put("orderNumber", log.getOrderNumber());
+        result.put("amount", log.getAmount());
+        result.put("type", log.getType());
+        result.put("remark", log.getRemark());
+        result.put("createdAt", log.getCreatedAt());
+        return result;
     }
 
     private Map<String, Object> fromOrder(CustomerOrder order) {
-        Map<String, Object> m = new HashMap<>();
-        m.put("id", order.getId());
-        m.put("orderNumber", order.getOrderNumber());
-        m.put("amount", order.getTotalAmount());
-        m.put("type", "PAY");
-        m.put("remark", "订单支付（历史记录）");
-        m.put("createdAt", order.getCreatedAt());
-        return m;
+        Map<String, Object> result = new HashMap<>();
+        result.put("id", order.getId());
+        result.put("orderNumber", order.getOrderNumber());
+        result.put("amount", order.getTotalAmount());
+        result.put("type", "PAY");
+        result.put("remark", "订单支付（历史记录）");
+        result.put("createdAt", order.getCreatedAt());
+        return result;
     }
 }

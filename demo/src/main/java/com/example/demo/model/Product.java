@@ -1,5 +1,6 @@
 package com.example.demo.model;
 
+import com.example.demo.dto.MerchantReviewView;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -12,6 +13,8 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.CascadeType;
+import jakarta.persistence.Transient;
+import jakarta.persistence.Transient;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -61,6 +64,18 @@ public class Product {
 
     @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ProductSize> sizesDetail = new ArrayList<>();
+
+    @Transient
+    private BigDecimal merchantRatingAverage = BigDecimal.ZERO;
+
+    @Transient
+    private Long merchantRatingCount = 0L;
+
+    @Column(name = "sales_count", nullable = false)
+    private Long salesCount = 0L;
+
+    @Transient
+    private List<MerchantReviewView> merchantReviews = new ArrayList<>();
 
     public Long getId() {
         return id;
@@ -148,5 +163,37 @@ public class Product {
 
     public void setSizesDetail(List<ProductSize> sizesDetail) {
         this.sizesDetail = sizesDetail;
+    }
+
+    public BigDecimal getMerchantRatingAverage() {
+        return merchantRatingAverage;
+    }
+
+    public void setMerchantRatingAverage(BigDecimal merchantRatingAverage) {
+        this.merchantRatingAverage = merchantRatingAverage;
+    }
+
+    public Long getMerchantRatingCount() {
+        return merchantRatingCount;
+    }
+
+    public void setMerchantRatingCount(Long merchantRatingCount) {
+        this.merchantRatingCount = merchantRatingCount;
+    }
+
+    public Long getSalesCount() {
+        return salesCount;
+    }
+
+    public void setSalesCount(Long salesCount) {
+        this.salesCount = salesCount;
+    }
+
+    public List<MerchantReviewView> getMerchantReviews() {
+        return merchantReviews;
+    }
+
+    public void setMerchantReviews(List<MerchantReviewView> merchantReviews) {
+        this.merchantReviews = merchantReviews;
     }
 }
